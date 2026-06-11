@@ -1,6 +1,7 @@
 package com.lgableband;
 
 import static org.hamcrest.Matchers.blankOrNullString;
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.not;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -413,19 +414,266 @@ class MvpApiControllerTests {
 			.andExpect(jsonPath("$.status").value("RESOLVED"));
 	}
 
+	@Test
+	void emergencyRequestFailsWhenUserHasNoGuardian() throws Exception {
+		String token = signupUserAndToken("noguardian-" + System.nanoTime());
+
+		this.mockMvc.perform(post("/api/emergency-requests")
+				.header("Authorization", "Bearer " + token)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("""
+					{
+					  "message": "보호자 없이 요청합니다.",
+					  "source": "APP"
+					}
+					"""))
+			.andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.code").value("NO_GUARDIAN"));
+	}
+
+	@Test
+	void linkedGuardianDashboardShowsNewEmergencyRequest() throws Exception {
+		String suffix = "dashboard-" + System.nanoTime();
+		String userToken = signupUserAndToken(suffix);
+		String guardianEmail = signupGuardian(suffix);
+		String message = "Codex 보호자 대시보드 확인 " + suffix;
+
+		this.mockMvc.perform(post("/api/guardians/link-by-email")
+				.header("Authorization", "Bearer " + userToken)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("""
+					{
+					  "email": "%s",
+					  "isPrimary": true,
+					  "notifyOnDanger": true
+					}
+					""".formatted(guardianEmail)))
+			.andExpect(status().isCreated())
+			.andExpect(jsonPath("$.connectionStatus").value("CONNECTED"));
+
+		this.mockMvc.perform(post("/api/emergency-requests")
+				.header("Authorization", "Bearer " + userToken)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("""
+					{
+					  "message": "%s",
+					  "source": "WEARABLE"
+					}
+					""".formatted(message)))
+			.andExpect(status().isCreated())
+			.andExpect(jsonPath("$.status").value("SENT"))
+			.andExpect(jsonPath("$.guardianNotified").value(true))
+			.andExpect(jsonPath("$.guardianTargets[0].deliveryStatus").value("SENT"));
+
+		String guardianToken = loginToken("GUARDIAN", guardianEmail);
+
+		this.mockMvc.perform(get("/api/guardians/dashboard").header("Authorization", "Bearer " + guardianToken))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.user.name").value("Codex 사용자 " + suffix))
+			.andExpect(jsonPath("$.emergencyRequests[0].message").value(message))
+			.andExpect(jsonPath("$.emergencyRequests[0].status").value("SENT"))
+			.andExpect(jsonPath("$.summary.activeEmergency").value(true));
+	}
+
+	@Test
+	void wearablePairingSessionCanBeCreated() throws Exception {
+		String deviceId = "able-band-test-" + System.nanoTime();
+
+		this.mockMvc.perform(post("/api/wearable/pairing-sessions")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(pairingSessionCreateBody(deviceId)))
+			.andExpect(status().isCreated())
+			.andExpect(jsonPath("$.pairingSessionId", containsString("pairing-")))
+			.andExpect(jsonPath("$.deviceId").value(deviceId))
+			.andExpect(jsonPath("$.deviceName").value("LG Able Band"))
+			.andExpect(jsonPath("$.pairingCode").value("ABLE-4IN-260610"))
+			.andExpect(jsonPath("$.status").value("WAITING"))
+			.andExpect(jsonPath("$.pairingPayload", containsString("lg-able-band://pair")))
+			.andExpect(jsonPath("$.pairingPayload", containsString("source=wearable")));
+	}
+
+	@Test
+	void userCanCompleteWearablePairingSession() throws Exception {
+		String deviceId = "able-band-complete-" + System.nanoTime();
+		PairingFixture pairing = createPairingSession(deviceId);
+		String token = userToken();
+
+		this.mockMvc.perform(post("/api/wearable/pairing-sessions/" + pairing.sessionId() + "/complete")
+				.header("Authorization", "Bearer " + token)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(pairingCompleteBody(deviceId, pairing.nonce(), "ABLE-4IN-260610")))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.pairingSessionId").value(pairing.sessionId()))
+			.andExpect(jsonPath("$.status").value("PAIRED"))
+			.andExpect(jsonPath("$.device.name").value("LG Able Band"))
+			.andExpect(jsonPath("$.device.type").value("WEARABLE"))
+			.andExpect(jsonPath("$.device.connectionStatus").value("CONNECTED"))
+			.andExpect(jsonPath("$.accessToken").value(token))
+			.andExpect(jsonPath("$.message").value("웨어러블 연동이 완료되었습니다."));
+	}
+
+	@Test
+	void wearablePollingAfterCompleteReturnsPairedStatus() throws Exception {
+		String deviceId = "able-band-poll-" + System.nanoTime();
+		PairingFixture pairing = createPairingSession(deviceId);
+		String token = userToken();
+
+		this.mockMvc.perform(post("/api/wearable/pairing-sessions/" + pairing.sessionId() + "/complete")
+				.header("Authorization", "Bearer " + token)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(pairingCompleteBody(deviceId, pairing.nonce(), "ABLE-4IN-260610")))
+			.andExpect(status().isOk());
+
+		this.mockMvc.perform(get("/api/wearable/pairing-sessions/" + pairing.sessionId())
+				.param("deviceId", deviceId)
+				.param("nonce", pairing.nonce()))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.status").value("PAIRED"))
+			.andExpect(jsonPath("$.linkedDeviceId").exists())
+			.andExpect(jsonPath("$.accessToken").value(token));
+	}
+
+	@Test
+	void wearablePairingRejectsWrongPairingCode() throws Exception {
+		String deviceId = "able-band-wrong-" + System.nanoTime();
+		PairingFixture pairing = createPairingSession(deviceId);
+
+		this.mockMvc.perform(post("/api/wearable/pairing-sessions/" + pairing.sessionId() + "/complete")
+				.header("Authorization", "Bearer " + userToken())
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(pairingCompleteBody(deviceId, pairing.nonce(), "WRONG-CODE")))
+			.andExpect(status().isBadRequest())
+			.andExpect(jsonPath("$.code").value("INVALID_PAIRING_PAYLOAD"));
+	}
+
+	@Test
+	void wearablePairingCompletionIsIdempotentForSameUserAndPayload() throws Exception {
+		String deviceId = "able-band-repeat-" + System.nanoTime();
+		PairingFixture pairing = createPairingSession(deviceId);
+		String token = userToken();
+		String body = pairingCompleteBody(deviceId, pairing.nonce(), "ABLE-4IN-260610");
+
+		this.mockMvc.perform(post("/api/wearable/pairing-sessions/" + pairing.sessionId() + "/complete")
+				.header("Authorization", "Bearer " + token)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(body))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.status").value("PAIRED"));
+
+		this.mockMvc.perform(post("/api/wearable/pairing-sessions/" + pairing.sessionId() + "/complete")
+				.header("Authorization", "Bearer " + token)
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(body))
+			.andExpect(status().isOk())
+			.andExpect(jsonPath("$.status").value("PAIRED"))
+			.andExpect(jsonPath("$.accessToken").value(token));
+	}
+
 	private String userToken() throws Exception {
-		MvcResult login = this.mockMvc.perform(post("/api/auth/login")
+		return loginToken("USER", "user@example.com");
+	}
+
+	private PairingFixture createPairingSession(String deviceId) throws Exception {
+		MvcResult created = this.mockMvc.perform(post("/api/wearable/pairing-sessions")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(pairingSessionCreateBody(deviceId)))
+			.andExpect(status().isCreated())
+			.andReturn();
+
+		String content = created.getResponse().getContentAsString();
+		return new PairingFixture(
+			extractJsonString(content, "pairingSessionId"),
+			extractJsonString(content, "nonce")
+		);
+	}
+
+	private String pairingSessionCreateBody(String deviceId) {
+		return """
+			{
+			  "deviceId": "%s",
+			  "deviceName": "LG Able Band",
+			  "pairingCode": "ABLE-4IN-260610"
+			}
+			""".formatted(deviceId);
+	}
+
+	private String pairingCompleteBody(String deviceId, String nonce, String pairingCode) {
+		return """
+			{
+			  "deviceId": "%s",
+			  "pairingCode": "%s",
+			  "nonce": "%s"
+			}
+			""".formatted(deviceId, pairingCode, nonce);
+	}
+
+	private String extractJsonString(String content, String key) {
+		String marker = "\"" + key + "\":\"";
+		int start = content.indexOf(marker);
+		if (start < 0) {
+			return "";
+		}
+		int valueStart = start + marker.length();
+		int valueEnd = content.indexOf("\"", valueStart);
+		return valueEnd < 0 ? "" : content.substring(valueStart, valueEnd);
+	}
+
+	private String signupUserAndToken(String suffix) throws Exception {
+		String email = "codex-user-" + suffix + "@example.com";
+		this.mockMvc.perform(post("/api/auth/signup")
 				.contentType(MediaType.APPLICATION_JSON)
 				.content("""
 					{
 					  "role": "USER",
-					  "email": "user@example.com",
+					  "name": "Codex 사용자 %s",
+					  "email": "%s",
+					  "password": "password1234",
+					  "accessibilityType": "HEARING",
+					  "notificationPrefs": {
+					    "channels": ["VOICE", "VIBRATION"],
+					    "highContrast": true,
+					    "largeText": true
+					  }
+					}
+					""".formatted(suffix, email)))
+			.andExpect(status().isCreated());
+		return loginToken("USER", email);
+	}
+
+	private String signupGuardian(String suffix) throws Exception {
+		String email = "codex-guardian-" + suffix + "@example.com";
+		this.mockMvc.perform(post("/api/auth/signup")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("""
+					{
+					  "role": "GUARDIAN",
+					  "name": "Codex 보호자 %s",
+					  "email": "%s",
+					  "password": "password1234",
+					  "phone": "010-0000-0000",
+					  "relationship": "FAMILY"
+					}
+					""".formatted(suffix, email)))
+			.andExpect(status().isCreated());
+		return email;
+	}
+
+	private String loginToken(String role, String email) throws Exception {
+		MvcResult login = this.mockMvc.perform(post("/api/auth/login")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("""
+					{
+					  "role": "%s",
+					  "email": "%s",
 					  "password": "password1234"
 					}
-					"""))
+					""".formatted(role, email)))
 			.andExpect(status().isOk())
 			.andReturn();
 		return login.getResponse().getContentAsString()
 			.replaceAll(".*\\\"accessToken\\\":\\\"([^\\\"]+)\\\".*", "$1");
+	}
+
+	private record PairingFixture(String sessionId, String nonce) {
 	}
 }
