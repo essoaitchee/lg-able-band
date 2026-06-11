@@ -442,6 +442,8 @@ function installMockBackend() {
           source: 'APP',
           sentAt: '2026-06-10T14:35:00+09:00',
           guardianNotified: true,
+          decisionSource: 'AI',
+          emergencyLevel: 'CRITICAL',
         },
         { status: 201 },
       )

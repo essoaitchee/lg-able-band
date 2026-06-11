@@ -34,6 +34,7 @@ export function HomeScreen({ session, onLogout }) {
   const [activeTab, setActiveTab] = useState('home')
   const [menuScreen, setMenuScreen] = useState('root')
   const [emergencyMessage, setEmergencyMessage] = useState('')
+  const [emergencySubmitting, setEmergencySubmitting] = useState(false)
   const [homeState, setHomeState] = useState({
     loading: true,
     error: '',
@@ -88,12 +89,20 @@ export function HomeScreen({ session, onLogout }) {
   }
 
   async function handleEmergencyRequest() {
+    if (emergencySubmitting) {
+      return
+    }
+
+    setEmergencySubmitting(true)
     setEmergencyMessage('긴급 요청을 보내는 중입니다.')
     try {
       const request = await createEmergencyRequest()
-      setEmergencyMessage(request.message || '보호자에게 긴급 요청을 보냈습니다.')
+      const message = request.message || '보호자에게 긴급 요청을 보냈습니다.'
+      setEmergencyMessage(request.decisionSource === 'AI' ? `SOS AI 판단 완료: ${message}` : message)
     } catch (error) {
       setEmergencyMessage(error.message || '긴급 요청을 보내지 못했습니다.')
+    } finally {
+      setEmergencySubmitting(false)
     }
   }
 
@@ -138,6 +147,7 @@ export function HomeScreen({ session, onLogout }) {
         {activeTab === 'home' ? (
           <HomeTab
             emergencyMessage={emergencyMessage}
+            emergencySubmitting={emergencySubmitting}
             statusLabel={statusLabel}
             summary={summary}
             onEmergencyRequest={handleEmergencyRequest}
