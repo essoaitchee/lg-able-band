@@ -21,6 +21,8 @@ export function VoiceChatbot({ preview, session, summary }) {
   const [response, setResponse] = useState(null)
   const [error, setError] = useState('')
   const recognitionRef = useRef(null)
+  const latestTranscriptRef = useRef('')
+  const sentTranscriptRef = useRef('')
 
   const supportsSpeechRecognition = Boolean(SpeechRecognition)
   const chatbotContext = useMemo(() => createChatbotContext(summary, preview), [preview, summary])
@@ -40,6 +42,8 @@ export function VoiceChatbot({ preview, session, summary }) {
     recognition.continuous = false
 
     recognition.onstart = () => {
+      latestTranscriptRef.current = ''
+      sentTranscriptRef.current = ''
       setIsListening(true)
       setStatus('듣는 중...')
       setError('')
@@ -51,11 +55,12 @@ export function VoiceChatbot({ preview, session, summary }) {
         .join('')
 
       setInputText(transcript)
+      latestTranscriptRef.current = transcript
 
       const lastResult = event.results[event.results.length - 1]
       if (lastResult.isFinal) {
         setStatus('음성 인식 완료')
-        sendMessage(transcript)
+        sendRecognizedText(transcript)
       }
     }
 
@@ -66,6 +71,7 @@ export function VoiceChatbot({ preview, session, summary }) {
 
     recognition.onend = () => {
       setIsListening(false)
+      sendRecognizedText(latestTranscriptRef.current)
     }
 
     recognitionRef.current = recognition
@@ -117,6 +123,16 @@ export function VoiceChatbot({ preview, session, summary }) {
       setError(requestError.message || '음성 챗봇 연결에 실패했습니다.')
       setStatus('연결 실패')
     }
+  }
+
+  function sendRecognizedText(text) {
+    const trimmedText = text.trim()
+    if (!trimmedText || sentTranscriptRef.current === trimmedText) {
+      return
+    }
+
+    sentTranscriptRef.current = trimmedText
+    sendMessage(trimmedText)
   }
 
   function speak(text) {
@@ -172,6 +188,12 @@ export function VoiceChatbot({ preview, session, summary }) {
               rows={3}
               placeholder="예: 세탁기 몇 분 남았어?"
               onChange={(event) => setInputText(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && !event.shiftKey) {
+                  event.preventDefault()
+                  sendMessage()
+                }
+              }}
             />
           </label>
 
