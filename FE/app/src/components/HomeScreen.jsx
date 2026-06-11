@@ -97,8 +97,7 @@ export function HomeScreen({ session, onLogout }) {
     setEmergencyMessage('긴급 요청을 보내는 중입니다.')
     try {
       const request = await createEmergencyRequest()
-      const message = request.message || '보호자에게 긴급 요청을 보냈습니다.'
-      setEmergencyMessage(request.decisionSource === 'AI' ? `SOS AI 판단 완료: ${message}` : message)
+      setEmergencyMessage(request.message || '보호자에게 긴급 요청을 보냈습니다.')
     } catch (error) {
       setEmergencyMessage(error.message || '긴급 요청을 보내지 못했습니다.')
     } finally {
