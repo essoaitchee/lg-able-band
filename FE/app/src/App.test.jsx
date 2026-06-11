@@ -251,7 +251,7 @@ describe('App login to home flow', () => {
 
     await user.click(screen.getByRole('button', { name: '기기' }))
     expect(screen.getByRole('heading', { name: '기기와 UWB' })).toBeTruthy()
-    expect(screen.getByRole('heading', { name: '우리 집 MVP 가전을 연결해요.' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: '우리 집 가전을 연결해요.' })).toBeTruthy()
     expect(screen.getAllByText('UWB 위치 안내').length).toBeGreaterThan(0)
     expect(screen.getByRole('button', { name: '위치 안내 시작' })).toBeTruthy()
     expect(screen.getByText('등록 현황')).toBeTruthy()
@@ -268,7 +268,7 @@ describe('App login to home flow', () => {
     expect(screen.getAllByText('잔열·과열 경고').length).toBeGreaterThan(0)
 
     await user.click(screen.getByRole('button', { name: '주변 제품 찾기' }))
-    expect(screen.getByRole('status').textContent).toContain('연결 가능한 MVP 가전 6종')
+    expect(screen.getByRole('status').textContent).toContain('모든 가전이 이미 연결되어 있습니다.')
 
     await user.click(screen.getByRole('button', { name: '메뉴' }))
     expect(screen.getByRole('heading', { name: '메뉴' })).toBeTruthy()
