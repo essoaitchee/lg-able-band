@@ -974,6 +974,17 @@ button:disabled {
   box-shadow: 0 14px 32px rgba(14, 116, 144, 0.16);
 }
 
+.device-product-card.already-connected {
+  cursor: default;
+  background: #f8fafc;
+  color: #64748b;
+  box-shadow: none;
+}
+
+.device-product-card.already-connected .appliance-icon {
+  opacity: 0.72;
+}
+
 .device-product-card strong {
   align-self: end;
   margin-top: 10px;
@@ -1000,6 +1011,11 @@ button:disabled {
   color: #1d4ed8;
   font-size: 0.68rem;
   font-weight: 900;
+}
+
+.device-product-card.already-connected .device-catalog-chip {
+  background: #e2e8f0;
+  color: #475569;
 }
 
 .connection-dot {

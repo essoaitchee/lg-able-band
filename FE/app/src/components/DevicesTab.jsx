@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
-import { createDevice, getDevices } from '../services/deviceService'
+import { useMemo, useState } from 'react'
+import { createDevice } from '../services/deviceService'
 
 const connectionLabels = {
   CONNECTED: '연결됨',
@@ -90,10 +90,20 @@ const deviceCatalog = [
 ]
 
 export function DevicesTab({ devices = [], maxDeviceCount, uwb }) {
-  const [connectedDevices, setConnectedDevices] = useState(devices)
-  const [selectedDeviceId, setSelectedDeviceId] = useState(devices[0]?.deviceId ?? null)
+  const catalogByType = useMemo(
+    () => Object.fromEntries(deviceCatalog.map((item) => [item.type, item])),
+    [],
+  )
+  const initialDevices = useMemo(
+    () => devices.map((device) => enrichDevice(device, catalogByType)),
+    [catalogByType, devices],
+  )
+
+  const [connectedDevices, setConnectedDevices] = useState(initialDevices)
+  const [selectedDeviceId, setSelectedDeviceId] = useState(
+    initialDevices[0]?.deviceId ?? null,
+  )
   const [connectionMessage, setConnectionMessage] = useState('')
-  const [isLoadingDevices, setIsLoadingDevices] = useState(false)
   const [isDevicePickerOpen, setIsDevicePickerOpen] = useState(false)
   const [screenMode, setScreenMode] = useState('list')
   const [draft, setDraft] = useState(createEmptyDraft())
@@ -115,47 +125,23 @@ export function DevicesTab({ devices = [], maxDeviceCount, uwb }) {
     (device) => device.locationSupported,
   ).length
 
-  const catalogByType = useMemo(
-    () => Object.fromEntries(deviceCatalog.map((item) => [item.type, item])),
-    [],
+  const registeredDeviceTypes = useMemo(
+    () => new Set(connectedDevices.map((device) => device.type)),
+    [connectedDevices],
   )
-
-  useEffect(() => {
-    let isMounted = true
-
-    async function loadDevices() {
-      setIsLoadingDevices(true)
-
-      try {
-        const items = await getDevices()
-        if (!isMounted) {
-          return
-        }
-
-        const nextDevices = items.map((device) => enrichDevice(device, catalogByType))
-        setConnectedDevices(nextDevices)
-        setSelectedDeviceId((current) => current ?? nextDevices[0]?.deviceId ?? null)
-      } catch (error) {
-        if (!isMounted) {
-          return
-        }
-        setConnectionMessage(error.message || '연결된 가전을 불러오지 못했습니다.')
-      } finally {
-        if (isMounted) {
-          setIsLoadingDevices(false)
-        }
-      }
-    }
-
-    loadDevices()
-
-    return () => {
-      isMounted = false
-    }
-  }, [catalogByType])
+  const availableDeviceCount = deviceCatalog.filter(
+    (device) => !registeredDeviceTypes.has(device.type),
+  ).length
+  const uwbTarget = getUwbTarget(connectedDevices, selectedDevice, uwb)
+  const uwbGuide = uwbTarget ? createUwbGuide(uwbTarget, uwb) : null
 
   function handleFindNearbyDevices() {
-    setConnectionMessage('연결 가능한 MVP 가전 6종을 확인했습니다.')
+    if (availableDeviceCount === 0) {
+      setConnectionMessage('모든 가전이 이미 연결되어 있습니다.')
+      return
+    }
+
+    setConnectionMessage(`연결 가능한 가전 ${availableDeviceCount}종을 확인했습니다.`)
   }
 
   function handleToggleDevicePicker() {
@@ -177,6 +163,12 @@ export function DevicesTab({ devices = [], maxDeviceCount, uwb }) {
   }
 
   function openCreatePage(template) {
+    if (registeredDeviceTypes.has(template.type)) {
+      setConnectionMessage(`${template.name}은 이미 연결된 가전입니다.`)
+      setIsDevicePickerOpen(false)
+      return
+    }
+
     setDraft({
       vendor: 'LG_THINQ',
       vendorDeviceId: template.defaultVendorDeviceId,
@@ -353,7 +345,7 @@ export function DevicesTab({ devices = [], maxDeviceCount, uwb }) {
       <div className="content-card device-hero-card">
         <div>
           <p className="card-label">LG ThinQ 연결</p>
-          <h2 id="devices-title">우리 집 MVP 가전을 연결해요.</h2>
+          <h2 id="devices-title">우리 집 가전을 연결해요.</h2>
           <p>세탁기, TV, 안전 전기레인지, 도어센서, 공기질 센서, 냉장고를 한 화면에서 관리합니다.</p>
         </div>
         <button className="device-find-button" type="button" onClick={handleFindNearbyDevices}>
@@ -382,21 +374,33 @@ export function DevicesTab({ devices = [], maxDeviceCount, uwb }) {
         </span>
       </div>
 
-      <section className="content-card uwb-card">
-        <div className="section-title-row">
-          <div>
-            <p className="card-label">UWB 위치 안내</p>
-            <h2>{uwb.targetName} 찾기</h2>
+      {uwbGuide ? (
+        <section className="content-card uwb-card">
+          <div className="section-title-row">
+            <div>
+              <p className="card-label">UWB 위치 안내</p>
+              <h2>{uwbGuide.targetName} 찾기</h2>
+            </div>
+            <span>{uwbGuide.distanceM}m</span>
           </div>
-          <span>{uwb.distanceM}m</span>
-        </div>
-        <p>
-          {uwb.vibrationPattern} · {uwb.voiceGuide}
-        </p>
-        <button className="primary-button full-button" type="button">
-          위치 안내 시작
-        </button>
-      </section>
+          <p>
+            {uwbGuide.vibrationPattern} · {uwbGuide.voiceGuide}
+          </p>
+          <button className="primary-button full-button" type="button">
+            위치 안내 시작
+          </button>
+        </section>
+      ) : (
+        <section className="content-card uwb-card">
+          <div className="section-title-row">
+            <div>
+              <p className="card-label">UWB 위치 안내</p>
+              <h2>연결된 위치 안내 가전이 없습니다</h2>
+            </div>
+          </div>
+          <p>UWB를 지원하는 가전을 연결하면 이곳에서 위치 안내를 시작할 수 있습니다.</p>
+        </section>
+      )}
 
       <section className="device-register-card" aria-labelledby="device-register-title">
         <div className="section-title-row">
@@ -404,7 +408,7 @@ export function DevicesTab({ devices = [], maxDeviceCount, uwb }) {
             <p className="card-label">연동 가전</p>
             <h2 id="device-register-title">가전 추가</h2>
           </div>
-          <span>{deviceCatalog.length}종</span>
+          <span>{availableDeviceCount}종</span>
         </div>
         <button
           className={isDevicePickerOpen ? 'device-add-button active' : 'device-add-button'}
@@ -422,20 +426,31 @@ export function DevicesTab({ devices = [], maxDeviceCount, uwb }) {
             className="device-product-grid device-catalog-grid"
             aria-label="추가 가능한 가전 목록"
           >
-            {deviceCatalog.map((device) => (
-              <button
-                className="device-product-card"
-                key={device.templateId}
-                type="button"
-                aria-label={`${device.name} 추가하기`}
-                onClick={() => openCreatePage(device)}
-              >
-                <DeviceIcon type={device.type} />
-                <span className="device-catalog-chip">추가 가능</span>
-                <strong>{device.name}</strong>
-                <small>{device.typeLabel}</small>
-              </button>
-            ))}
+            {deviceCatalog.map((device) => {
+              const isRegistered = registeredDeviceTypes.has(device.type)
+
+              return (
+                <button
+                  className={
+                    isRegistered ? 'device-product-card already-connected' : 'device-product-card'
+                  }
+                  key={device.templateId}
+                  type="button"
+                  aria-label={
+                    isRegistered ? `${device.name} 이미 연결됨` : `${device.name} 추가하기`
+                  }
+                  disabled={isRegistered}
+                  onClick={() => openCreatePage(device)}
+                >
+                  <DeviceIcon type={device.type} />
+                  <span className="device-catalog-chip">
+                    {isRegistered ? '이미 연결됨' : '추가 가능'}
+                  </span>
+                  <strong>{device.name}</strong>
+                  <small>{device.typeLabel}</small>
+                </button>
+              )
+            })}
           </section>
         ) : null}
       </section>
@@ -449,9 +464,7 @@ export function DevicesTab({ devices = [], maxDeviceCount, uwb }) {
           <span>{connectedDevices.length}개</span>
         </div>
 
-        {isLoadingDevices ? (
-          <p className="status-message">연결된 가전을 불러오는 중입니다.</p>
-        ) : connectedDevices.length > 0 ? (
+        {connectedDevices.length > 0 ? (
           <div className="device-product-grid">
             {connectedDevices.map((device) => (
               <button
@@ -561,12 +574,12 @@ function enrichDevice(device, catalogByType) {
   return {
     ...template,
     ...device,
-    room: template.room,
-    typeLabel: template.typeLabel,
-    detail: template.detail,
-    primarySignal: template.primarySignal,
-    management: template.management,
-    lastEventLabel: formatLastEvent(device.lastEventAt),
+    room: device.room || template.room,
+    typeLabel: device.typeLabel || template.typeLabel,
+    detail: device.detail || template.detail,
+    primarySignal: device.primarySignal || template.primarySignal,
+    management: device.management || template.management,
+    lastEventLabel: device.lastEventLabel || formatLastEvent(device.lastEventAt),
   }
 }
 
@@ -579,6 +592,38 @@ function createFallbackTemplate(device) {
     detail: '연결된 가전의 상태를 확인할 수 있습니다.',
     primarySignal: '기기 상태 안내',
     management: ['상태 확인'],
+  }
+}
+
+function getUwbTarget(devices, selectedDevice, uwb) {
+  const connectedUwbDevices = devices.filter(
+    (device) => device.connectionStatus === 'CONNECTED' && device.locationSupported,
+  )
+
+  if (connectedUwbDevices.length === 0) {
+    return null
+  }
+
+  if (
+    selectedDevice?.connectionStatus === 'CONNECTED' &&
+    selectedDevice.locationSupported
+  ) {
+    return selectedDevice
+  }
+
+  const previewTarget = connectedUwbDevices.find((device) => device.name === uwb?.targetName)
+  return previewTarget || connectedUwbDevices[0]
+}
+
+function createUwbGuide(target, uwb) {
+  const distanceM = Number.isFinite(uwb?.distanceM) ? uwb.distanceM : 2.4
+  const vibrationPattern = uwb?.vibrationPattern || '강한 진동'
+
+  return {
+    targetName: target.name,
+    distanceM,
+    vibrationPattern,
+    voiceGuide: `${target.name}까지 약 ${distanceM}미터입니다. 연결된 가전 기준으로 위치를 안내합니다.`,
   }
 }
 

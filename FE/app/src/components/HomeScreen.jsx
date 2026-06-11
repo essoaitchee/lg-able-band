@@ -28,7 +28,7 @@ const tabTitles = {
   menu: '메뉴',
 }
 
-const MAX_DEVICE_COUNT = 10
+const MAX_DEVICE_COUNT = 6
 
 export function HomeScreen({ session, onLogout }) {
   const [activeTab, setActiveTab] = useState('home')
