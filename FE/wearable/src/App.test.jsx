@@ -118,6 +118,13 @@ describe('Wearable MVP', () => {
     expect(screen.getByText('위험 알림')).toBeTruthy()
     expect(screen.getByText('안전 전기레인지')).toBeTruthy()
     expect(screen.getByLabelText('1/3')).toBeTruthy()
+    expect(JSON.parse(localStorage.getItem('lg-able-band.pairingSession'))).toMatchObject({
+      pairingSessionId: 'pairing-api-001',
+      deviceId: 'able-band-api-001',
+      nonce: 'nonce-api-001',
+      accessToken: 'paired-api-token',
+      status: 'success',
+    })
 
     fireEvent.click(screen.getByRole('button', { name: '다음 알림' }))
     expect(screen.getByRole('heading', { name: '도어센서 열림' })).toBeTruthy()
@@ -126,6 +133,51 @@ describe('Wearable MVP', () => {
     fireEvent.click(screen.getByRole('button', { name: '다음 알림' }))
     expect(screen.getByRole('heading', { name: '냉장고 문 열림' })).toBeTruthy()
     expect(screen.getByLabelText('3/3')).toBeTruthy()
+  })
+
+  it('restores paired wearable state after refresh without generating a new QR', async () => {
+    localStorage.setItem('lg-able-band.accessToken', 'paired-api-token')
+    localStorage.setItem(
+      'lg-able-band.pairingSession',
+      JSON.stringify({
+        ...pairingApiSession,
+        accessToken: 'paired-api-token',
+        status: 'success',
+      }),
+    )
+    const apiFetch = setupPairingApi({ statuses: ['WAITING'] })
+
+    render(<App />)
+
+    expect(await screen.findByRole('heading', { name: '전기레인지 과열 주의' })).toBeTruthy()
+    expect(screen.queryByRole('heading', { name: '휴대폰으로 연동' })).toBeNull()
+    expect(
+      apiFetch.mock.calls.find(
+        ([url, options = {}]) =>
+          String(url) === '/api/wearable/pairing-sessions' && options.method === 'POST',
+      ),
+    ).toBeUndefined()
+  })
+
+  it('clears stale paired state and shows QR when restored token is rejected', async () => {
+    localStorage.setItem('lg-able-band.accessToken', 'expired-api-token')
+    localStorage.setItem(
+      'lg-able-band.pairingSession',
+      JSON.stringify({
+        ...pairingApiSession,
+        accessToken: 'expired-api-token',
+        status: 'success',
+      }),
+    )
+    setupPairingApi({ alertUnauthorized: true, statuses: ['WAITING'] })
+
+    render(<App />)
+
+    expect(await screen.findByRole('heading', { name: '휴대폰으로 연동' })).toBeTruthy()
+    expect(screen.getByRole('status').textContent).toContain('스캔 대기')
+    expect(screen.queryByRole('heading', { name: '알림 상태 확인 필요' })).toBeNull()
+    expect(localStorage.getItem('lg-able-band.accessToken')).toBeNull()
+    expect(localStorage.getItem('lg-able-band.pairingSession')).toBeNull()
   })
 
   it('usesConfiguredPairingPollInterval', async () => {
@@ -366,11 +418,34 @@ describe('Wearable MVP', () => {
 
   it('shows alert load failure when fallback is disabled', async () => {
     window.__ABLE_BAND_WEARABLE_FALLBACK__ = false
-    setupPairingApi({ alertFailure: true })
+    window.__ABLE_BAND_PAIRING_SUCCESS_DELAY_MS__ = 1
+    const refreshedSession = createPairingApiSession({
+      pairingSessionId: 'pairing-api-002',
+      deviceId: 'able-band-api-002',
+      pairingCode: 'ABLE-API-002',
+      nonce: 'nonce-api-002',
+      pairingPayload: 'lg-able-band://pair?pairingSessionId=pairing-api-002&nonce=nonce-api-002',
+    })
+    setupPairingApi({
+      alertFailure: true,
+      createSessions: [pairingApiSession, refreshedSession],
+      statusesBySession: {
+        'pairing-api-001': ['PAIRED'],
+        'pairing-api-002': ['WAITING'],
+      },
+    })
     render(<App />)
 
     expect(await screen.findByRole('heading', { name: '알림 상태 확인 필요' })).toBeTruthy()
     expect((await screen.findByRole('status')).textContent).toContain('서버 연결 실패')
+
+    fireEvent.click(screen.getByRole('button', { name: 'QR 생성' }))
+
+    expect(await screen.findByRole('heading', { name: '휴대폰으로 연동' })).toBeTruthy()
+    expect(screen.getByRole('status').textContent).toContain('스캔 대기')
+    expect(screen.getByAltText('Able Band 연동 QR 코드').getAttribute('data-pairing-payload')).toContain(
+      'pairing-api-002',
+    )
   })
 
   it('keeps terminal UWB sessions from polling again', async () => {
@@ -414,6 +489,7 @@ async function renderPairedApp(options) {
 function setupPairingApi({
   statuses = ['WAITING', 'PAIRED'],
   alertFailure = false,
+  alertUnauthorized = false,
   createSessions = [pairingApiSession],
   emergencyErrorCode = '',
   statusesBySession = {},
@@ -472,6 +548,10 @@ function setupPairingApi({
     }
 
     if (endpoint === '/api/alerts?limit=20') {
+      if (alertUnauthorized) {
+        return jsonResponse({ code: 'UNAUTHORIZED', message: '로그인이 필요합니다.' }, 401)
+      }
+
       if (alertFailure) {
         return jsonResponse({ message: '서버 연결 실패' }, 500)
       }
