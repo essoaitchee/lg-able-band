@@ -132,6 +132,7 @@ export function VoiceChatbot({
   const chatResetVersionRef = useRef(0)
   const greetingTimeoutRef = useRef(null)
   const speechEndTimeoutRef = useRef(null)
+  const speechStartTimeoutRef = useRef(null)
   const appFlowRef = useRef(null)
 
   const supportsSpeechRecognition = Boolean(SpeechRecognition)
@@ -157,6 +158,7 @@ export function VoiceChatbot({
       window.clearTimeout(greetingTimeoutRef.current)
       window.clearTimeout(recognitionStartTimeoutRef.current)
       window.clearTimeout(speechEndTimeoutRef.current)
+      window.clearTimeout(speechStartTimeoutRef.current)
       wakeRecognitionRef.current?.stop()
       recognitionRef.current?.stop()
       window.speechSynthesis?.cancel()
@@ -239,6 +241,7 @@ export function VoiceChatbot({
     window.clearTimeout(recognitionStartTimeoutRef.current)
     window.clearTimeout(greetingTimeoutRef.current)
     window.clearTimeout(speechEndTimeoutRef.current)
+    window.clearTimeout(speechStartTimeoutRef.current)
     window.speechSynthesis?.cancel()
     recognitionRef.current?.stop()
     setIsListening(false)
@@ -250,6 +253,11 @@ export function VoiceChatbot({
       onClose?.()
     } else {
       setIsOpen(false)
+      window.setTimeout(() => {
+        if (!isOpenRef.current) {
+          startChatbotWakeService()
+        }
+      }, 500)
     }
   }
 
@@ -261,6 +269,7 @@ export function VoiceChatbot({
     window.clearTimeout(recognitionStartTimeoutRef.current)
     window.clearTimeout(greetingTimeoutRef.current)
     window.clearTimeout(speechEndTimeoutRef.current)
+    window.clearTimeout(speechStartTimeoutRef.current)
     window.speechSynthesis?.cancel()
     recognitionRef.current?.stop()
     setIsListening(false)
@@ -284,6 +293,7 @@ export function VoiceChatbot({
     window.clearTimeout(recognitionStartTimeoutRef.current)
     window.clearTimeout(greetingTimeoutRef.current)
     window.clearTimeout(speechEndTimeoutRef.current)
+    window.clearTimeout(speechStartTimeoutRef.current)
     window.speechSynthesis?.cancel()
     recognitionRef.current?.stop()
 
@@ -941,6 +951,7 @@ export function VoiceChatbot({
 
   function respondWithLocalAssistant(userText, assistantText, continueConversation) {
     const visibleUserText = userText.trim()
+    const shouldKeepTalking = continueConversation || conversationActiveRef.current
     setInputText('')
     setError('')
     setMessages((previousMessages) => [
@@ -957,7 +968,7 @@ export function VoiceChatbot({
     ])
     setStatus('응답 중...')
     cueAssistantTurn()
-    if (continueConversation) {
+    if (shouldKeepTalking) {
       speakAndCueUserTurn(assistantText, () => {
         setStatus('응답 완료')
       })
@@ -1068,6 +1079,11 @@ export function VoiceChatbot({
         }
         setFollowupPromptResponse(enrichedData)
       }
+      const spokenResponseText = getSpokenAssistantText(
+        enrichedData,
+        enrichedData.voiceText || enrichedData.answerText || '응답을 받았습니다.',
+        chatbotContext,
+      )
       setResponse(enrichedData)
       setMessages((previousMessages) => previousMessages.map((message) => (
         message.id === pendingMessage.id
@@ -1082,12 +1098,12 @@ export function VoiceChatbot({
       )))
       setStatus('응답 중...')
       cueAssistantTurn()
-      if (continueConversation) {
-        speakAndCueUserTurn(enrichedData.voiceText || enrichedData.answerText, () => {
+      if (continueConversation || conversationActiveRef.current) {
+        speakAndCueUserTurn(spokenResponseText, () => {
           setStatus('응답 완료')
         })
       } else {
-        speak(enrichedData.voiceText || enrichedData.answerText, () => {
+        speak(spokenResponseText, () => {
           setStatus('응답 완료')
         })
       }
@@ -1111,7 +1127,7 @@ export function VoiceChatbot({
       )))
       setStatus('연결 실패')
 
-      if (continueConversation) {
+      if (continueConversation || conversationActiveRef.current) {
         speakAndCueUserTurn('연결에 실패했어요. 잠시 후 다시 시도해 주세요.')
       }
     } finally {
@@ -1133,24 +1149,20 @@ export function VoiceChatbot({
   }
 
   function cueAssistantTurn() {
-    playTurnCue('assistant')
+    return true
   }
 
-  function speakAndCueUserTurn(text, afterSpeech) {
+  function speakAndCueUserTurn(text, afterSpeech, options = {}) {
+    pauseRecognitionForAssistantSpeech()
     speak(text, () => {
       afterSpeech?.()
       cueUserTurnAndListen()
-    })
+    }, options)
   }
 
   function speakGreetingAndCueUserTurn() {
-    playGreetingAudio().then((played) => {
-      if (played) {
-        cueUserTurnAndListen()
-        return
-      }
-
-      speakAndCueUserTurn('무엇을 도와드릴까요')
+    speakAndCueUserTurn('무엇을 도와드릴까요', null, {
+      fallbackAudio: playGreetingAudio,
     })
   }
 
@@ -1162,6 +1174,18 @@ export function VoiceChatbot({
     conversationActiveRef.current = true
     manualStopRef.current = false
     speakAndCueUserTurn(text)
+  }
+
+  function pauseRecognitionForAssistantSpeech() {
+    recognitionStartingRef.current = false
+    recognitionListeningRef.current = false
+    window.clearTimeout(recognitionStartTimeoutRef.current)
+    try {
+      recognitionRef.current?.abort?.()
+    } catch {
+      // The recognizer may already be stopped between turns.
+    }
+    setIsListening(false)
   }
 
   function cueUserTurnAndListen() {
@@ -1187,50 +1211,87 @@ export function VoiceChatbot({
     return playTurnCueTone(kind)
   }
 
-  function speak(text, onEnd) {
+  function speak(text, onEnd, options = {}) {
     if (!text || !('speechSynthesis' in window)) {
+      if (options.fallbackAudio) {
+        options.fallbackAudio().finally(() => onEnd?.())
+        return
+      }
+
       onEnd?.()
       return
     }
 
     window.clearTimeout(speechEndTimeoutRef.current)
-    const hadActiveSpeech = Boolean(window.speechSynthesis.speaking || window.speechSynthesis.pending)
-    window.speechSynthesis.resume?.()
-    if (!hadActiveSpeech) {
-      speakWithRetry(text, onEnd, 0)
-      return
+    window.clearTimeout(speechStartTimeoutRef.current)
+    try {
+      window.speechSynthesis.cancel?.()
+      window.speechSynthesis.resume?.()
+    } catch {
+      // Speech synthesis can be unavailable for a moment while mobile browsers swap audio sessions.
     }
 
     window.setTimeout(() => {
       window.speechSynthesis.resume?.()
-      speakWithRetry(text, onEnd, 0)
-    }, 80)
+      speakWithRetry(text, onEnd, 0, options)
+    }, 120)
   }
 
-  function speakWithRetry(text, onEnd, retryCount) {
+  function speakWithRetry(text, onEnd, retryCount, options = {}) {
     const utterance = createKoreanUtterance(text)
+    let speechStarted = false
     const handleEnd = callOnce(() => {
       window.clearTimeout(speechEndTimeoutRef.current)
+      window.clearTimeout(speechStartTimeoutRef.current)
       onEnd?.()
     })
     const handleError = callOnce(() => {
       window.clearTimeout(speechEndTimeoutRef.current)
+      window.clearTimeout(speechStartTimeoutRef.current)
       if (retryCount < 2) {
         window.setTimeout(() => {
           window.speechSynthesis?.resume?.()
-          speakWithRetry(text, onEnd, retryCount + 1)
+          speakWithRetry(text, onEnd, retryCount + 1, options)
         }, 250)
+        return
+      }
+
+      if (options.fallbackAudio) {
+        options.fallbackAudio().finally(() => onEnd?.())
         return
       }
 
       onEnd?.()
     })
 
+    utterance.onstart = () => {
+      speechStarted = true
+      window.clearTimeout(speechStartTimeoutRef.current)
+    }
     utterance.onend = handleEnd
     utterance.onerror = handleError
     window.speechSynthesis.speak(utterance)
     window.speechSynthesis.resume?.()
     const fallbackMs = Math.min(Math.max(text.length * 350, 4500), 30000)
+    speechStartTimeoutRef.current = window.setTimeout(() => {
+      if (speechStarted) {
+        return
+      }
+
+      try {
+        window.speechSynthesis.cancel?.()
+        window.speechSynthesis.resume?.()
+      } catch {
+        // Continue with retry or fallback.
+      }
+
+      if (retryCount < 2) {
+        speakWithRetry(text, onEnd, retryCount + 1, options)
+        return
+      }
+
+      handleError()
+    }, 1200)
     speechEndTimeoutRef.current = window.setTimeout(handleEnd, fallbackMs)
   }
 
@@ -1343,7 +1404,7 @@ export function VoiceChatbot({
                           type="button"
                           key={prompt}
                           disabled={isRequesting}
-                          onClick={() => sendMessage(prompt, false)}
+                          onClick={() => sendMessage(prompt, true)}
                         >
                           {prompt}
                         </button>
@@ -1414,7 +1475,11 @@ export function VoiceChatbot({
                       {message.role === 'bot' && !message.hideInfoCard && shouldRenderInfoCard(message.data) ? (
                         <InfoAgentCard
                           response={message.data}
-                          onReplay={() => replayAndCueUserTurn(message.data.voiceText || message.data.answerText)}
+                          onReplay={() => replayAndCueUserTurn(getSpokenAssistantText(
+                            message.data,
+                            message.data.voiceText || message.data.answerText || message.text,
+                            chatbotContext,
+                          ))}
                         />
                       ) : null}
 
@@ -1422,7 +1487,11 @@ export function VoiceChatbot({
                         <>
                           <ChatAlertCards data={message.data} context={chatbotContext} />
                           <MessageReplayAction
-                            onReplay={() => replayAndCueUserTurn(message.data?.voiceText || message.text)}
+                            onReplay={() => replayAndCueUserTurn(getSpokenAssistantText(
+                              message.data,
+                              message.data?.voiceText || message.text,
+                              chatbotContext,
+                            ))}
                           />
                         </>
                       ) : null}
@@ -1458,7 +1527,7 @@ export function VoiceChatbot({
                       type="button"
                       key={prompt}
                       disabled={isRequesting}
-                      onClick={() => sendMessage(requestText, false, prompt)}
+                      onClick={() => sendMessage(requestText, true, prompt)}
                     >
                       {prompt}
                     </button>
@@ -1479,7 +1548,7 @@ export function VoiceChatbot({
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' && !event.shiftKey) {
                     event.preventDefault()
-                    sendMessage(inputText, false)
+                    sendMessage(inputText, true)
                   }
                 }}
               />
@@ -1508,7 +1577,7 @@ export function VoiceChatbot({
               type="button"
               aria-label="텍스트로 보내기"
               disabled={isRequesting}
-              onClick={() => sendMessage(inputText, false)}
+              onClick={() => sendMessage(inputText, true)}
             >
               {isRequesting ? '…' : '↗'}
             </button>
@@ -1672,6 +1741,50 @@ function ChatAlertCards({ data, context }) {
       </div>
     </section>
   )
+}
+
+function getSpokenAssistantText(data, fallbackText, context) {
+  const parts = []
+  addSpokenPart(parts, data?.voiceText || fallbackText || data?.answerText)
+
+  if (shouldRenderInfoCard(data)) {
+    addSpokenPart(parts, data.infoCard?.title)
+    addSpokenPart(parts, data.infoCard?.summary ? `요약. ${data.infoCard.summary}` : '')
+    addSpokenPart(parts, data.infoCard?.recommendedAction ? `해야 할 일. ${data.infoCard.recommendedAction}` : '')
+    addSpokenPart(parts, data.infoCard?.source ? `출처. ${data.infoCard.source}` : '')
+
+    if (data.notifyGuardian) {
+      addSpokenPart(parts, '필요하면 이 정보를 보호자에게 공유할 수 있어요.')
+    }
+  }
+
+  if (shouldRenderAlertCards(data)) {
+    const alerts = getAlertCardsForResponse(data, context).slice(0, 3)
+    if (alerts.length > 0) {
+      addSpokenPart(parts, `현재 새로운 알림이 ${alerts.length}건 있습니다.`)
+      alerts.forEach((alert, index) => {
+        addSpokenPart(
+          parts,
+          `${index + 1}번째 알림. ${alert.title || '알림'}. ${alert.message || '상세 내용이 없습니다.'}${alert.time ? ` ${alert.time}.` : ''}`,
+        )
+      })
+    }
+  }
+
+  return parts.join(' ')
+}
+
+function addSpokenPart(parts, value) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim()
+  if (!text) {
+    return
+  }
+
+  if (parts.some((part) => part === text || part.includes(text) || text.includes(part))) {
+    return
+  }
+
+  parts.push(text)
 }
 
 function MessageReplayAction({ onReplay }) {

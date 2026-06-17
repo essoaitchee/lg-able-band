@@ -5,9 +5,9 @@ let dingAudioBufferPromise = null
 let greetingAudioBuffer = null
 let greetingAudioBufferPromise = null
 
-const DING_DURATION_SECONDS = 0.78
+const DING_DURATION_SECONDS = 0.82
 const DING_FREQUENCY_HZ = 1046.5
-const TURN_CUE_AUDIO_SRC = '/turn-cue-ding.mp3'
+const TURN_CUE_AUDIO_SRC = '/turn-cue-ding.wav'
 const GREETING_AUDIO_SRC = '/chatbot-greeting.wav'
 
 async function getAudioContext() {
@@ -81,12 +81,6 @@ export async function playGreetingAudio() {
 
 export async function playTurnCueTone(kind) {
   if (kind === 'user') {
-    const playedAudioElement = await playDingAudioElement()
-    if (playedAudioElement) {
-      navigator.vibrate?.(80)
-      return true
-    }
-
     const context = await getAudioContext()
     const buffer = context ? await loadDingAudioBuffer(context) : null
     if (context && buffer) {
@@ -95,6 +89,12 @@ export async function playTurnCueTone(kind) {
       return new Promise((resolve) => {
         window.setTimeout(() => resolve(true), buffer.duration * 1000 + 80)
       })
+    }
+
+    const playedAudioElement = await playDingAudioElement()
+    if (playedAudioElement) {
+      navigator.vibrate?.(80)
+      return true
     }
   }
 
@@ -157,7 +157,10 @@ async function loadDingAudioBuffer(context) {
         dingAudioBuffer = buffer
         return buffer
       })
-      .catch(() => null)
+      .catch(() => {
+        dingAudioBufferPromise = null
+        return null
+      })
   }
 
   return dingAudioBufferPromise
@@ -198,7 +201,10 @@ async function loadGreetingAudioBuffer(context) {
         greetingAudioBuffer = buffer
         return buffer
       })
-      .catch(() => null)
+      .catch(() => {
+        greetingAudioBufferPromise = null
+        return null
+      })
   }
 
   return greetingAudioBufferPromise
