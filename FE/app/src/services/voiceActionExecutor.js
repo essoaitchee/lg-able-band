@@ -1,12 +1,21 @@
 import { apiRequest } from './apiClient'
-import { getAlerts, confirmAlert as confirmAlertApi } from './alertService'
+import {
+  getAlertDetail as getAlertDetailApi,
+  getAlerts as getAlertsApi,
+  confirmAlert as confirmAlertApi,
+  deleteAlert as deleteAlertApi,
+} from './alertService'
 import { createDevice, getDevices } from './deviceService'
 import { createEmergencyRequest } from './emergencyService'
-import { deleteGuardian as deleteGuardianApi, getGuardians, linkGuardianByEmail } from './guardianService'
+import { deleteGuardian as deleteGuardianApi, linkGuardianByEmail } from './guardianService'
 import { completeWearablePairing } from './wearablePairingService'
 
 function ok(message, data = {}) {
   return { success: true, message, data }
+}
+
+function actionOk(message, { affectedCount = 0, data = {} } = {}) {
+  return { success: true, message, affectedCount, data }
 }
 
 function fail(message, reason = '', nextActions = ['다시 시도', '취소']) {
@@ -165,7 +174,7 @@ export async function readAlerts(context = {}) {
   }
 
   try {
-    const alerts = await getAlerts({ limit: 20 })
+    const alerts = await getAlertsApi({ limit: 20 })
     return ok('알림 확인이 완료되었습니다.', { alerts })
   } catch (error) {
     return fail('알림 확인에 실패했습니다.', error.message)
@@ -178,6 +187,112 @@ export async function confirmAlert(alertId) {
     return ok('알림 확인 처리가 완료되었습니다.', { alert })
   } catch (error) {
     return fail('알림 확인 처리에 실패했습니다.', error.message)
+  }
+}
+
+export async function getAlerts(filter = 'ALL', context = {}) {
+  try {
+    const alerts = await listAlertsByFilter(filter, context)
+    return actionOk(`${filterLabel(filter)} 알림 ${alerts.length}건을 조회했습니다.`, {
+      affectedCount: alerts.length,
+      data: { alerts, filter },
+    })
+  } catch (error) {
+    return fail('알림 조회에 실패했습니다.', error.message, ['다시 조회', '취소'])
+  }
+}
+
+export async function getAlertDetail(alertId, context = {}) {
+  try {
+    const alert = await loadAlertDetail(alertId, context)
+    return actionOk(`${alert.title || '알림'} 상세 정보를 조회했습니다.`, {
+      affectedCount: alert ? 1 : 0,
+      data: { alert },
+    })
+  } catch (error) {
+    return fail('알림 상세 조회에 실패했습니다.', error.message, ['다시 조회', '취소'])
+  }
+}
+
+export async function confirmAlertsByFilter(filter = 'ALL', context = {}) {
+  try {
+    const alerts = await listAlertsByFilter(filter, context)
+    const targets = alerts.filter((alert) => alert.status !== 'CONFIRMED')
+    if (targets.length === 0) {
+      return fail('알림 확인 완료 처리에 실패했습니다.', `확인 완료 처리할 ${filterLabel(filter)} 알림이 없습니다.`, ['다시 조회', '취소'])
+    }
+
+    const updatedAlerts = []
+    for (const alert of targets) {
+      updatedAlerts.push(await confirmAlertApi(alert.alertId))
+    }
+    await refreshAlerts()
+    return actionOk(`${filterLabel(filter)} 알림 ${targets.length}건이 확인 완료 처리되었습니다.`, {
+      affectedCount: targets.length,
+      data: { alerts: updatedAlerts, filter },
+    })
+  } catch (error) {
+    return fail('알림 확인 완료 처리에 실패했습니다.', error.message, ['다시 조회', '취소'])
+  }
+}
+
+export async function deleteAlert(alertId, context = {}) {
+  try {
+    const alert = await loadAlertDetail(alertId, context)
+    await deleteAlertApi(alertId)
+    await refreshAlerts()
+    return actionOk(`${alert?.title || '알림'}이 삭제되었습니다.`, {
+      affectedCount: 1,
+      data: { alertId, alert },
+    })
+  } catch (error) {
+    return fail('알림 삭제에 실패했습니다.', error.message, ['다시 조회', '취소'])
+  }
+}
+
+export async function deleteAlertsByFilter(filter = 'ALL', context = {}) {
+  try {
+    const alerts = await listAlertsByFilter(filter, context)
+    if (alerts.length === 0) {
+      return fail('알림 삭제에 실패했습니다.', `삭제할 ${filterLabel(filter)} 알림이 없습니다.`, ['다시 조회', '취소'])
+    }
+
+    for (const alert of alerts) {
+      await deleteAlertApi(alert.alertId)
+    }
+    await refreshAlerts()
+    return actionOk(`${filterLabel(filter)} 알림 ${alerts.length}건이 삭제되었습니다.`, {
+      affectedCount: alerts.length,
+      data: { alerts, filter },
+    })
+  } catch (error) {
+    return fail('알림 삭제에 실패했습니다.', error.message, ['다시 조회', '취소'])
+  }
+}
+
+export async function refreshAlerts() {
+  try {
+    const alerts = await getAlertsApi({ limit: 50 })
+    dispatchAlertEvent('lg-able-band:alerts-updated', { alerts })
+    return actionOk('알림 목록을 새로고침했습니다.', {
+      affectedCount: alerts.length,
+      data: { alerts },
+    })
+  } catch (error) {
+    return fail('알림 새로고침에 실패했습니다.', error.message, ['다시 조회', '취소'])
+  }
+}
+
+export async function filterAlerts(filter = 'ALL', context = {}) {
+  try {
+    const alerts = await listAlertsByFilter(filter, context)
+    dispatchAlertEvent('lg-able-band:alerts-filter', { filter })
+    return actionOk(`${filterLabel(filter)} 알림 화면으로 변경했습니다.`, {
+      affectedCount: alerts.length,
+      data: { alerts, filter },
+    })
+  } catch (error) {
+    return fail('알림 화면 변경에 실패했습니다.', error.message, ['다시 조회', '취소'])
   }
 }
 
@@ -208,6 +323,68 @@ export async function checkEventHistory(date, context = {}) {
     date,
     events: alerts,
   })
+}
+
+async function listAlertsByFilter(filter = 'ALL', context = {}) {
+  try {
+    return filterAlertList(await getAlertsApi({ limit: 50 }), filter)
+  } catch {
+    return filterAlertList(localAlertList(context), filter)
+  }
+}
+
+async function loadAlertDetail(alertId, context = {}) {
+  try {
+    return await getAlertDetailApi(alertId)
+  } catch {
+    const alert = localAlertList(context).find((item) => String(item.alertId) === String(alertId))
+    if (!alert) {
+      throw new Error('알림을 찾을 수 없습니다.')
+    }
+    return alert
+  }
+}
+
+function localAlertList(context = {}) {
+  return [
+    ...(context.preview?.alerts || []),
+    ...(context.summary?.recentAlerts || []),
+    ...(context.summary?.unreadAlerts || []),
+  ].filter(Boolean).filter((alert, index, alerts) => (
+    alerts.findIndex((item) => String(item.alertId) === String(alert.alertId)) === index
+  ))
+}
+
+function filterAlertList(alerts, filter = 'ALL') {
+  if (filter === 'UNREAD') {
+    return alerts.filter((alert) => alert.status === 'UNREAD')
+  }
+  if (filter === 'DANGER') {
+    return alerts.filter((alert) => alert.type === 'DANGER' || ['HIGH', 'CRITICAL'].includes(alert.severity))
+  }
+  if (filter === 'EMERGENCY') {
+    return alerts.filter((alert) => alert.type === 'EMERGENCY' || alert.severity === 'CRITICAL')
+  }
+  if (filter === 'LIFE') {
+    return alerts.filter((alert) => alert.type === 'LIFE')
+  }
+  return alerts
+}
+
+function filterLabel(filter = 'ALL') {
+  return {
+    ALL: '전체',
+    UNREAD: '미확인',
+    DANGER: '위험',
+    EMERGENCY: '긴급',
+    LIFE: '생활',
+  }[filter] || '전체'
+}
+
+function dispatchAlertEvent(type, detail) {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent(type, { detail }))
+  }
 }
 
 export async function remoteControlDevice(deviceId, action, context = {}) {

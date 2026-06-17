@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import { confirmAlert, replayAlert } from '../services/alertService'
 import { getWarningRecommendation } from '../services/warningService'
 
@@ -25,17 +25,11 @@ const severityLabels = {
   CRITICAL: '긴급',
 }
 
-const statusLabels = {
-  UNREAD: '미확인',
-  CONFIRMED: '확인 완료',
-  REPLAYED: '다시 듣기',
-  ESCALATED: '보호자 전달',
-}
-
 const filters = [
   { id: 'ALL', label: '전체' },
   { id: 'UNREAD', label: '미확인' },
   { id: 'DANGER', label: '위험' },
+  { id: 'EMERGENCY', label: '긴급' },
   { id: 'LIFE', label: '생활' },
 ]
 
@@ -76,6 +70,7 @@ export function AlertsTab({
   const [activeFilter, setActiveFilter] = useState('ALL')
   const [selectedAlertId, setSelectedAlertId] = useState(null)
   const [feedbackMessage, setFeedbackMessage] = useState('')
+  const [inlineFeedback, setInlineFeedback] = useState(null)
   const [warningRecommendation, setWarningRecommendation] = useState(null)
 
   const selectedAlert =
@@ -98,9 +93,39 @@ export function AlertsTab({
     scrollAppContentToTop()
   }, [alertView, selectedAlertId])
 
+  useEffect(() => {
+    function handleAlertsUpdated(event) {
+      if (Array.isArray(event.detail?.alerts)) {
+        setAlertItems(event.detail.alerts)
+        setSelectedAlertId(null)
+        setFeedbackMessage('')
+        setInlineFeedback(null)
+      }
+    }
+
+    function handleAlertFilter(event) {
+      const nextFilter = event.detail?.filter
+      if (filters.some((filter) => filter.id === nextFilter)) {
+        setActiveFilter(nextFilter)
+        setSelectedAlertId(null)
+        setFeedbackMessage('')
+        setInlineFeedback(null)
+      }
+    }
+
+    window.addEventListener('lg-able-band:alerts-updated', handleAlertsUpdated)
+    window.addEventListener('lg-able-band:alerts-filter', handleAlertFilter)
+
+    return () => {
+      window.removeEventListener('lg-able-band:alerts-updated', handleAlertsUpdated)
+      window.removeEventListener('lg-able-band:alerts-filter', handleAlertFilter)
+    }
+  }, [])
+
   async function handleSelectAlert(alertId) {
     setSelectedAlertId(alertId)
     setFeedbackMessage('')
+    setInlineFeedback(null)
     setWarningRecommendation(null)
 
     const alert = alertItems.find((item) => item.alertId === alertId)
@@ -112,6 +137,7 @@ export function AlertsTab({
   }
 
   async function handleConfirmAlert(alertId) {
+    setInlineFeedback(null)
     try {
       await confirmAlert(alertId)
       setAlertItems((currentAlerts) =>
@@ -131,6 +157,7 @@ export function AlertsTab({
   }
 
   async function handleReplayAlert(alert) {
+    setInlineFeedback(null)
     const guide = createAlertGuide(alert)
     const speechStarted = speakAlert(guide)
 
@@ -160,11 +187,19 @@ export function AlertsTab({
   }
 
   function handleDeleteAlert(alertId) {
+    const deletedIndex = filteredAlerts.findIndex((alert) => alert.alertId === alertId)
+    const nextVisibleAlertId = filteredAlerts[deletedIndex + 1]?.alertId ?? null
+
     setAlertItems((currentAlerts) => currentAlerts.filter((alert) => alert.alertId !== alertId))
     if (selectedAlertId === alertId) {
       setSelectedAlertId(null)
     }
-    setFeedbackMessage('알림을 목록에서 삭제했습니다.')
+    setFeedbackMessage('')
+    setInlineFeedback({
+      appendToEnd: nextVisibleAlertId === null,
+      insertBeforeAlertId: nextVisibleAlertId,
+      message: '알림을 목록에서 삭제했습니다.',
+    })
   }
 
   if (alertView === 'stats' && !selectedAlert) {
@@ -201,6 +236,7 @@ export function AlertsTab({
                 onClick={() => {
                   setActiveFilter(filter.id)
                   setFeedbackMessage('')
+                  setInlineFeedback(null)
                 }}
               >
                 {filter.label}
@@ -210,7 +246,12 @@ export function AlertsTab({
 
           <div className="alert-list" aria-label="알림 목록">
             {filteredAlerts.length > 0 ? (
-              filteredAlerts.map((alert) => (
+              <>
+              {filteredAlerts.map((alert) => (
+                <Fragment key={alert.alertId}>
+                {inlineFeedback?.insertBeforeAlertId === alert.alertId ? (
+                  <InlineAlertFeedback message={inlineFeedback.message} />
+                ) : null}
                 <article
                   className={[
                     'content-card alert-card',
@@ -219,7 +260,6 @@ export function AlertsTab({
                   ]
                     .filter(Boolean)
                     .join(' ')}
-                  key={alert.alertId}
                 >
                   <div className="alert-card-main no-icon">
                     <div className="alert-card-copy">
@@ -270,7 +310,14 @@ export function AlertsTab({
                     ) : null}
                   </div>
                 </article>
-              ))
+                </Fragment>
+              ))}
+              {inlineFeedback?.appendToEnd ? (
+                <InlineAlertFeedback message={inlineFeedback.message} />
+              ) : null}
+              </>
+            ) : inlineFeedback ? (
+              <InlineAlertFeedback message={inlineFeedback.message} />
             ) : (
               <p className="empty-state">조건에 맞는 알림이 없습니다.</p>
             )}
@@ -284,6 +331,14 @@ export function AlertsTab({
         </>
       )}
     </section>
+  )
+}
+
+function InlineAlertFeedback({ message }) {
+  return (
+    <p className="status-message alert-inline-status" role="status">
+      {message}
+    </p>
   )
 }
 
@@ -488,6 +543,10 @@ function filterAlert(alert, activeFilter) {
 
   if (activeFilter === 'DANGER') {
     return isUrgentAlert(alert)
+  }
+
+  if (activeFilter === 'EMERGENCY') {
+    return alert.type === 'EMERGENCY' || alert.severity === 'CRITICAL'
   }
 
   if (activeFilter === 'LIFE') {

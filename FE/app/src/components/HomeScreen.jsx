@@ -1,3 +1,4 @@
+import jsQR from 'jsqr'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { LivingSignalSettingsScreen } from '../features/living-signal'
 import { getAppPreview, getHomeSummary } from '../services/homeService'
@@ -7,6 +8,7 @@ import { AlertsTab } from './AlertsTab'
 import { DevicesTab } from './DevicesTab'
 import { HomeTab } from './HomeTab'
 import { CHATBOT_INTERRUPT_EVENT, VoiceChatbot } from './VoiceChatbot'
+import { completeWearablePairing } from '../services/wearablePairingService'
 
 function scrollAppContentToTop() {
   const appContent = document.querySelector('.app-content')
@@ -478,6 +480,7 @@ function WearablePairingScannerScreen({ onBack }) {
     '웨어러블 화면의 QR 코드를 프레임 안에 맞춰주세요.',
   )
   const [scanStatus, setScanStatus] = useState('ready')
+  const [isVideoReady, setIsVideoReady] = useState(false)
   const [detectedValue, setDetectedValue] = useState('')
   const videoRef = useRef(null)
   const canvasRef = useRef(null)
@@ -501,6 +504,7 @@ function WearablePairingScannerScreen({ onBack }) {
     if (videoRef.current) {
       videoRef.current.srcObject = null
     }
+    setIsVideoReady(false)
   }
 
   useEffect(
@@ -511,7 +515,9 @@ function WearablePairingScannerScreen({ onBack }) {
   )
 
   async function handleStartScan() {
+    stopScanResources()
     setScanStatus('scanning')
+    setIsVideoReady(false)
     setDetectedValue('')
 
     if (!navigator.mediaDevices?.getUserMedia) {
@@ -521,24 +527,20 @@ function WearablePairingScannerScreen({ onBack }) {
     }
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+      const { stream } = await openCameraStream(videoRef.current)
       streamRef.current = stream
-
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream
-        await videoRef.current.play()
-      }
 
       const detector = window.BarcodeDetector
         ? new window.BarcodeDetector({ formats: ['qr_code'] })
         : null
 
       activeScanRef.current = true
+      setIsVideoReady(true)
       setScannerMessage('카메라가 켜졌습니다. QR 코드를 프레임 안에 맞춰주세요.')
       scanQrFrame(detector)
-    } catch {
+    } catch (error) {
       setScannerMessage(
-        '카메라 권한이 필요합니다. 브라우저 권한을 허용한 뒤 다시 시도해주세요.',
+        error?.message || '카메라 권한이 필요합니다. 브라우저 권한을 허용한 뒤 다시 시도해주세요.',
       )
       setScanStatus('blocked')
     }
@@ -567,9 +569,9 @@ function WearablePairingScannerScreen({ onBack }) {
 
       try {
         const codes = detector ? await detector.detect(canvas) : []
-        const rawValue = codes[0]?.rawValue
+        const rawValue = codes[0]?.rawValue || decodeQrFromCanvas(context, canvas)
 
-        if (rawValue && handleQrDetected(rawValue)) {
+        if (rawValue && await handleQrDetected(rawValue)) {
           return
         }
       } catch {
@@ -583,7 +585,7 @@ function WearablePairingScannerScreen({ onBack }) {
     scanFrameRef.current = window.requestAnimationFrame(() => scanQrFrame(detector))
   }
 
-  function handleQrDetected(rawValue) {
+  async function handleQrDetected(rawValue) {
     const pairing = parseWearablePairingPayload(rawValue)
 
     if (!pairing) {
@@ -593,13 +595,24 @@ function WearablePairingScannerScreen({ onBack }) {
       return false
     }
 
-    stopScanResources()
-    setScanStatus('paired')
-    setDetectedValue(rawValue)
-    setScannerMessage(
-      `${pairing.deviceName} ${pairing.pairingCode}를 인식했습니다. 웨어러블 연동이 완료되었습니다.`,
-    )
-    return true
+    activeScanRef.current = false
+    setScannerMessage(`${pairing.deviceName} ${pairing.pairingCode}를 인식했습니다. 웨어러블을 연동하고 있습니다.`)
+
+    try {
+      await completeWearablePairing(pairing)
+      stopScanResources()
+      setScanStatus('paired')
+      setDetectedValue(rawValue)
+      setScannerMessage(
+        `${pairing.deviceName} ${pairing.pairingCode}를 인식했습니다. 웨어러블 연동이 완료되었습니다.`,
+      )
+      return true
+    } catch (error) {
+      stopScanResources()
+      setScanStatus('blocked')
+      setScannerMessage(error.message || '웨어러블 연동에 실패했습니다. QR을 새로 발급한 뒤 다시 스캔해주세요.')
+      return true
+    }
   }
 
   function handleStopScan() {
@@ -627,7 +640,13 @@ function WearablePairingScannerScreen({ onBack }) {
         </p>
 
         <div className={`qr-scanner-preview scanner-${scanStatus}`} aria-label="QR 카메라 스캔 영역">
-          <video ref={videoRef} className="scanner-video" muted playsInline aria-hidden="true" />
+          <video
+            ref={videoRef}
+            className={isVideoReady ? 'scanner-video video-ready' : 'scanner-video'}
+            muted
+            playsInline
+            aria-hidden="true"
+          />
           <canvas ref={canvasRef} className="scanner-canvas" aria-hidden="true" />
           <div className="scanner-top-bar">
             <span>QR 스캔</span>
@@ -646,6 +665,10 @@ function WearablePairingScannerScreen({ onBack }) {
           </div>
         </div>
 
+        <p className={scanStatus === 'blocked' ? 'member-status-message error' : 'member-status-message'} role="status">
+          {scannerMessage}
+        </p>
+
         {detectedValue ? (
           <p className="scanner-result">연동 정보: {formatPairingResult(detectedValue)}</p>
         ) : null}
@@ -661,6 +684,111 @@ function WearablePairingScannerScreen({ onBack }) {
       </section>
     </section>
   )
+}
+
+async function openCameraStream(video) {
+  const primaryConstraints = await getPreferredCameraConstraints()
+  let stream = await navigator.mediaDevices.getUserMedia(primaryConstraints)
+
+  if (!video) {
+    return { stream }
+  }
+
+  await attachVideoStream(video, stream)
+  const hasVisibleFrame = await waitForVisibleVideoFrame(video)
+  if (hasVisibleFrame) {
+    return { stream }
+  }
+
+  stopMediaStream(stream)
+  const fallbackConstraints = { video: { facingMode: { ideal: 'environment' } } }
+  stream = await navigator.mediaDevices.getUserMedia(fallbackConstraints)
+  await attachVideoStream(video, stream)
+  const fallbackHasVisibleFrame = await waitForVisibleVideoFrame(video)
+
+  if (!fallbackHasVisibleFrame) {
+    stopMediaStream(stream)
+    throw new Error('카메라는 켜졌지만 화면이 들어오지 않습니다. 다른 앱에서 카메라를 사용 중인지 확인해주세요.')
+  }
+
+  return { stream }
+}
+
+async function getPreferredCameraConstraints() {
+  const devices = await listVideoInputDevices()
+  const physicalCamera = devices.find((device) => !isVirtualCamera(device))
+
+  if (physicalCamera?.deviceId) {
+    return {
+      video: {
+        deviceId: {
+          exact: physicalCamera.deviceId,
+        },
+      },
+    }
+  }
+
+  return { video: true }
+}
+
+async function listVideoInputDevices() {
+  try {
+    const devices = await navigator.mediaDevices?.enumerateDevices?.()
+    return (devices || []).filter((device) => device.kind === 'videoinput')
+  } catch {
+    return []
+  }
+}
+
+function isVirtualCamera(device) {
+  return /virtual|obs|snap|xsplit|manycam|mirametrix/i.test(device.label || '')
+}
+
+async function attachVideoStream(video, stream) {
+  video.srcObject = stream
+  await video.play()
+}
+
+function waitForVisibleVideoFrame(video) {
+  const timeoutMs = cameraFrameTimeoutMs()
+  const startedAt = Date.now()
+
+  return new Promise((resolve) => {
+    function checkFrame() {
+      if (video.videoWidth && video.videoHeight) {
+        resolve(true)
+        return
+      }
+      if (Date.now() - startedAt >= timeoutMs) {
+        resolve(false)
+        return
+      }
+      window.requestAnimationFrame(checkFrame)
+    }
+
+    checkFrame()
+  })
+}
+
+function cameraFrameTimeoutMs() {
+  const override = Number(window.__ABLE_BAND_CAMERA_FRAME_TIMEOUT_MS__ || import.meta.env.VITE_CAMERA_FRAME_TIMEOUT_MS)
+  return Number.isFinite(override) && override > 0 ? override : 1200
+}
+
+function stopMediaStream(stream) {
+  stream?.getTracks?.().forEach((track) => track.stop())
+}
+
+function decodeQrFromCanvas(context, canvas) {
+  try {
+    const imageData = context.getImageData(0, 0, canvas.width, canvas.height)
+    if (typeof window.__ABLE_BAND_QR_DECODER__ === 'function') {
+      return window.__ABLE_BAND_QR_DECODER__(imageData, canvas.width, canvas.height) || ''
+    }
+    return jsQR(imageData.data, imageData.width, imageData.height)?.data || ''
+  } catch {
+    return ''
+  }
 }
 
 function parseWearablePairingPayload(rawValue) {
@@ -679,8 +807,9 @@ function parseWearablePairingPayload(rawValue) {
     const pairingSessionId = params.get('pairingSessionId')
     const deviceId = params.get('deviceId')
     const pairingCode = params.get('pairingCode')
+    const nonce = params.get('nonce')
 
-    if (!pairingSessionId || !deviceId || !pairingCode) {
+    if (!pairingSessionId || !deviceId || !pairingCode || !nonce) {
       return null
     }
 
@@ -688,6 +817,7 @@ function parseWearablePairingPayload(rawValue) {
       pairingSessionId,
       deviceId,
       pairingCode,
+      nonce,
       deviceName: deviceId.includes('able-band') ? 'LG Able Band' : '웨어러블',
     }
   } catch {
@@ -720,12 +850,7 @@ function GuardianConnectionScreen({
   const [message, setMessage] = useState({ tone: '', text: '' })
   const [submitting, setSubmitting] = useState(false)
   const [deletingGuardianId, setDeletingGuardianId] = useState(null)
-
-  useEffect(() => {
-    if (guardians.length === 0) {
-      setForm((current) => (current.isPrimary ? current : { ...current, isPrimary: true }))
-    }
-  }, [guardians.length])
+  const isPrimaryChecked = guardians.length === 0 || form.isPrimary
 
   function handleChange(field, value) {
     setForm((current) => ({
@@ -754,7 +879,7 @@ function GuardianConnectionScreen({
     try {
       const guardian = await onLinkGuardian({
         email,
-        isPrimary: form.isPrimary,
+        isPrimary: isPrimaryChecked,
         notifyOnDanger: form.notifyOnDanger,
       })
       setMessage({
@@ -831,7 +956,8 @@ function GuardianConnectionScreen({
           <label className="guardian-option-card">
             <input
               type="checkbox"
-              checked={form.isPrimary}
+              checked={isPrimaryChecked}
+              disabled={guardians.length === 0}
               onChange={(event) => handleChange('isPrimary', event.target.checked)}
             />
             <span>

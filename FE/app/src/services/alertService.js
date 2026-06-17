@@ -30,6 +30,12 @@ export async function confirmAlert(alertId) {
   })
 }
 
+export async function deleteAlert(alertId) {
+  return apiRequest(`/api/alerts/${alertId}`, {
+    method: 'DELETE',
+  })
+}
+
 export async function replayAlert(alertId) {
   return apiRequest(`/api/alerts/${alertId}/replay`, {
     method: 'POST',

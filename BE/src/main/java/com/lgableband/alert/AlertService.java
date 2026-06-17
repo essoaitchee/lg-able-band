@@ -272,6 +272,30 @@ public class AlertService {
 		);
 	}
 
+	public DeleteResponse delete(String authorization, long alertId) {
+		JdbcTemplate jdbcTemplate = jdbcTemplate();
+		MvpDataService.CurrentUser user = this.dataService.currentUser(authorization);
+
+		if (jdbcTemplate == null) {
+			this.mockDataStore.deleteAlert(user.userId(), alertId);
+			return new DeleteResponse(alertId, true);
+		}
+
+		Integer ownedAlertCount = jdbcTemplate.queryForObject(
+			"SELECT COUNT(*) FROM alert WHERE alert_id = ? AND user_id = ?",
+			Integer.class,
+			alertId,
+			user.userId()
+		);
+		if (ownedAlertCount == null || ownedAlertCount == 0) {
+			throw new ApiException(HttpStatus.NOT_FOUND, "RESOURCE_NOT_FOUND", "알림을 찾을 수 없습니다.");
+		}
+
+		jdbcTemplate.update("DELETE FROM alert_delivery WHERE alert_id = ?", alertId);
+		int deletedRows = jdbcTemplate.update("DELETE FROM alert WHERE alert_id = ? AND user_id = ?", alertId, user.userId());
+		return new DeleteResponse(alertId, deletedRows > 0);
+	}
+
 	private AlertView fromMockAlert(MockDataStore.Alert alert) {
 		DeviceType deviceType = inferDeviceType(alert.deviceName());
 		return new AlertView(
@@ -402,6 +426,9 @@ public class AlertService {
 		OffsetDateTime confirmedAt,
 		ReplayPayload replay
 	) {
+	}
+
+	public record DeleteResponse(long alertId, boolean deleted) {
 	}
 
 	public record ReplayPayload(String voiceGuide, OffsetDateTime replayedAt) {

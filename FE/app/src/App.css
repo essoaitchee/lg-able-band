@@ -293,6 +293,11 @@ button:disabled {
   font-weight: 800;
 }
 
+.alert-list .alert-inline-status {
+  margin: -4px 0 0;
+  border: 1px solid #e5e7eb;
+}
+
 .login-panel .status-message {
   padding: 12px;
   background: #ecfdf5;
