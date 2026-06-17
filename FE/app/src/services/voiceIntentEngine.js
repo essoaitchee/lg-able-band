@@ -12,7 +12,13 @@ export const VOICE_INTENTS = {
   CONNECT_WEARABLE: 'CONNECT_WEARABLE',
   CHECK_WEARABLE_STATUS: 'CHECK_WEARABLE_STATUS',
   READ_ALERTS: 'READ_ALERTS',
+  LIST_ALERTS: 'LIST_ALERTS',
+  READ_ALERT_DETAIL: 'READ_ALERT_DETAIL',
   CONFIRM_ALERT: 'CONFIRM_ALERT',
+  CONFIRM_ALERTS_BY_FILTER: 'CONFIRM_ALERTS_BY_FILTER',
+  DELETE_ALERT: 'DELETE_ALERT',
+  DELETE_ALERTS_BY_FILTER: 'DELETE_ALERTS_BY_FILTER',
+  FILTER_ALERTS: 'FILTER_ALERTS',
   SET_NOTIFICATION_SOUND: 'SET_NOTIFICATION_SOUND',
   SET_VIBRATION_PATTERN: 'SET_VIBRATION_PATTERN',
   SET_LIFE_SIGNAL: 'SET_LIFE_SIGNAL',
@@ -113,12 +119,18 @@ async function continueTask(task, text, context, options = {}) {
     case VOICE_INTENTS.CHECK_WEARABLE_STATUS:
       return executeAndReply(null, actions.checkWearableStatus(context), formatWearableStatusResult)
     case VOICE_INTENTS.READ_ALERTS:
-      if (!hasLocalAlerts(context)) {
-        return { handled: false }
-      }
-      return executeAndReply(null, actions.readAlerts(context), formatAlertsResult)
+    case VOICE_INTENTS.LIST_ALERTS:
+      return executeAndReply(null, actions.getAlerts(extractAlertFilter(text), context), formatAlertsResult)
+    case VOICE_INTENTS.FILTER_ALERTS:
+      return executeAndReply(null, actions.filterAlerts(extractAlertFilter(text), context), formatAlertFilterResult)
+    case VOICE_INTENTS.READ_ALERT_DETAIL:
+      return continueReadAlertDetail(nextTask, text, context)
     case VOICE_INTENTS.CONFIRM_ALERT:
-      return continueConfirmAlert(nextTask, text, context)
+    case VOICE_INTENTS.CONFIRM_ALERTS_BY_FILTER:
+      return continueAlertMutation(nextTask, text, context, 'confirm')
+    case VOICE_INTENTS.DELETE_ALERT:
+    case VOICE_INTENTS.DELETE_ALERTS_BY_FILTER:
+      return continueAlertMutation(nextTask, text, context, 'delete')
     case VOICE_INTENTS.SET_NOTIFICATION_SOUND:
       return continueSimpleSetting(nextTask, text, 'soundType', '어떤 알림음으로 설정할까요?', () => (
         actions.setNotificationSound(nextTask.slots.alertType || 'ALL', nextTask.slots.soundType)
@@ -322,13 +334,126 @@ async function continueConnectWearable(task, text) {
   return executeAndReply(null, actions.connectWearableByCode(code))
 }
 
-async function continueConfirmAlert(task, text, context) {
-  const alertId = text.match(/\d+/)?.[0] || context.summary?.recentAlerts?.[0]?.alertId || context.preview?.alerts?.[0]?.alertId
-  if (!alertId) {
-    const prompt = '확인 처리할 알림을 찾지 못했습니다. 먼저 알림을 읽어드릴까요?'
+async function continueReadAlertDetail(task, text, context) {
+  if (task.step === 'FOLLOWUP' && task.slots.lastAlert) {
+    const value = normalize(text)
+    if (value.includes('삭제') || value.includes('지워')) {
+      return promptAlertMutation({
+        ...task,
+        currentIntent: VOICE_INTENTS.DELETE_ALERT,
+        slots: { alert: task.slots.lastAlert },
+      }, 'delete')
+    }
+    if (value.includes('확인') || value.includes('읽음')) {
+      return promptAlertMutation({
+        ...task,
+        currentIntent: VOICE_INTENTS.CONFIRM_ALERT,
+        slots: { alert: task.slots.lastAlert },
+      }, 'confirm')
+    }
+    const prompt = '이 알림을 확인 완료 처리하거나 삭제할 수 있습니다. 어떻게 할까요?'
     return { handled: true, nextTask: { ...task, lastPrompt: prompt }, responseText: prompt }
   }
-  return executeAndReply(null, actions.confirmAlert(alertId))
+
+  if (task.step === 'SELECT_ALERT') {
+    const selected = selectNumberedAlert(text, task.slots.matches)
+    if (!selected) {
+      return { handled: true, nextTask: task, responseText: '몇 번째 알림인지 말해 주세요. 첫 번째, 두 번째처럼 말하면 됩니다.' }
+    }
+    return alertDetailReply(selected)
+  }
+
+  const alerts = await loadVoiceAlerts(context)
+  const matches = findAlertsFromText(text, alerts)
+  if (matches.length === 0) {
+    return { handled: true, nextTask: null, responseText: '상세 내용을 알려드릴 알림을 찾지 못했습니다. 최근 알림 알려줘처럼 먼저 조회해 주세요.' }
+  }
+  if (matches.length > 1) {
+    const prompt = `${matches[0].title} 알림이 ${matches.length}건 있습니다. ${matches.slice(0, 2).map((alert, index) => `${index + 1}번째는 ${formatAlertTimeText(alert.occurredAt)} 알림입니다`).join(', ')}. 어떤 알림을 자세히 볼까요?`
+    return { handled: true, nextTask: { ...task, step: 'SELECT_ALERT', slots: { matches }, lastPrompt: prompt }, responseText: prompt }
+  }
+  return alertDetailReply(matches[0])
+}
+
+async function continueAlertMutation(task, text, context, actionType) {
+  if (task.step === 'CONFIRM_ACTION') {
+    if (!isAffirmative(text)) {
+      const label = task.slots.filter ? `${alertFilterLabel(task.slots.filter)} 알림` : `${task.slots.alert?.title || '알림'}`
+      return { handled: true, nextTask: null, responseText: `${label} ${actionType === 'delete' ? '삭제' : '확인 완료 처리'}를 취소했습니다.` }
+    }
+
+    const result = task.slots.alert
+      ? actionType === 'delete'
+        ? await actions.deleteAlert(task.slots.alert.alertId, context)
+        : await actions.confirmAlert(task.slots.alert.alertId)
+      : actionType === 'delete'
+        ? await actions.deleteAlertsByFilter(task.slots.filter, context)
+        : await actions.confirmAlertsByFilter(task.slots.filter, context)
+    if (!result.success) return resultToReply(null, result)
+    const refreshed = await actions.refreshAlerts()
+    return {
+      handled: true,
+      nextTask: null,
+      result,
+      responseText: `${result.message} ${remainingAlertsText(refreshed.data?.alerts || [])}`,
+    }
+  }
+
+  if (task.step === 'SELECT_ALERT') {
+    const selected = selectNumberedAlert(text, task.slots.matches)
+    if (!selected) {
+      return { handled: true, nextTask: task, responseText: '몇 번째 알림인지 말해 주세요. 첫 번째, 두 번째처럼 말씀하시면 됩니다.' }
+    }
+    return promptAlertMutation({ ...task, slots: { alert: selected } }, actionType)
+  }
+
+  const filter = extractAlertFilter(text)
+  const isFilterAction = task.currentIntent === VOICE_INTENTS.CONFIRM_ALERTS_BY_FILTER || task.currentIntent === VOICE_INTENTS.DELETE_ALERTS_BY_FILTER || isGenericAlertFilterText(text)
+  if (isFilterAction) {
+    const result = await actions.getAlerts(filter, context)
+    const alerts = (result.data?.alerts || []).filter((alert) => actionType === 'delete' || alert.status !== 'CONFIRMED')
+    if (alerts.length === 0) {
+      return {
+        handled: true,
+        nextTask: null,
+        responseText: actionType === 'delete'
+          ? `삭제할 ${alertFilterLabel(filter)} 알림이 없습니다.`
+          : `확인 완료 처리할 ${alertFilterLabel(filter)} 알림이 없습니다.`,
+      }
+    }
+    return promptAlertMutation({ ...task, slots: { filter, count: alerts.length } }, actionType)
+  }
+
+  const alerts = await loadVoiceAlerts(context)
+  const matches = findAlertsFromText(text, alerts)
+  if (matches.length === 0) {
+    return { handled: true, nextTask: null, responseText: `${actionType === 'delete' ? '삭제할' : '확인 완료 처리할'} 알림을 찾지 못했습니다.` }
+  }
+  if (matches.length > 1) {
+    const prompt = `${matches[0].title} 알림이 ${matches.length}건 있습니다. ${matches.slice(0, 2).map((alert, index) => `${index + 1}번째는 ${formatAlertTimeText(alert.occurredAt)} 알림입니다`).join(', ')}. 어떤 알림을 처리할까요?`
+    return { handled: true, nextTask: { ...task, step: 'SELECT_ALERT', slots: { matches }, lastPrompt: prompt }, responseText: prompt }
+  }
+  return promptAlertMutation({ ...task, slots: { alert: matches[0] } }, actionType)
+}
+
+function promptAlertMutation(task, actionType) {
+  const isDelete = actionType === 'delete'
+  const targetText = task.slots.alert
+    ? `${task.slots.alert.title} 알림`
+    : `${alertFilterLabel(task.slots.filter)} 알림 ${task.slots.count}건`
+  const prompt = isDelete
+    ? `${targetText}을 삭제할까요? 삭제하면 되돌릴 수 없습니다.`
+    : `${targetText}을 확인 완료 처리할까요?`
+  return {
+    handled: true,
+    nextTask: { ...task, step: 'CONFIRM_ACTION', lastPrompt: prompt },
+    responseText: prompt,
+  }
+}
+
+function alertDetailReply(alert) {
+  const responseText = `${alert.title} 알림입니다. ${alert.message || '상세 내용이 없습니다.'} ${alert.deviceName ? `${alert.deviceName}에서 발생했고, ` : ''}위치는 ${alert.locationName || '위치 정보 없음'}입니다. 발생 시간은 ${formatAlertTimeText(alert.occurredAt)}입니다. 이 알림을 확인 완료 처리하거나 삭제할 수 있습니다. 어떻게 할까요?`
+  return { handled: true, nextTask: { currentIntent: VOICE_INTENTS.READ_ALERT_DETAIL, step: 'FOLLOWUP', slots: { lastAlert: alert }, history: [], lastPrompt: responseText }, responseText }
 }
 
 async function continueSimpleSetting(task, text, slotName, prompt, execute) {
@@ -413,8 +538,10 @@ function formatDeviceListResult(result) {
 function formatAlertsResult(result) {
   if (!result.success) return resultFailureText(result)
   const alerts = result.data.alerts || []
-  if (alerts.length === 0) return '현재 읽을 알림이 없습니다.'
-  return `현재 알림이 ${alerts.length}건 있습니다. ${alerts.slice(0, 3).map((alert, index) => `${index + 1}번째, ${alert.title || '알림'}. ${alert.message || ''}`).join(' ')}`
+  const filter = result.data.filter || 'ALL'
+  const label = alertFilterLabel(filter)
+  if (alerts.length === 0) return `${label} 알림은 없습니다.`
+  return `${label} 알림은 ${alerts.length}건입니다. ${alerts.slice(0, 3).map((alert, index) => `${index + 1}번째, ${alert.title || '알림'}. ${alert.message || ''}`).join(' ')} 상세 내용을 들으시겠어요?`
 }
 
 function formatWearableStatusResult(result) {
@@ -451,12 +578,137 @@ function formatGuideDistance(distanceM) {
   return Number.isInteger(distance) ? `약 ${distance}미터` : `약 ${distance.toFixed(1)}미터`
 }
 
-function hasLocalAlerts(context = {}) {
-  return Boolean(
-    context.summary?.recentAlerts?.length ||
-    context.summary?.unreadAlerts?.length ||
-    context.preview?.alerts?.length,
-  )
+async function loadVoiceAlerts(context = {}) {
+  const result = await actions.getAlerts('ALL', context)
+  if (!result.success) return []
+  return result.data?.alerts || []
+}
+
+function extractAlertFilter(text) {
+  const value = normalize(text)
+  if (value.includes('미확인') || value.includes('안읽') || value.includes('안읽은')) return 'UNREAD'
+  if (value.includes('긴급도움') || value.includes('긴급')) return 'EMERGENCY'
+  if (value.includes('위험한') || value.includes('위험')) return 'DANGER'
+  if (value.includes('생활') || value.includes('세탁')) return 'LIFE'
+  if (value.includes('전체') || value.includes('모든')) return 'ALL'
+  return 'ALL'
+}
+
+function alertFilterLabel(filter = 'ALL') {
+  return {
+    ALL: '전체',
+    UNREAD: '미확인',
+    DANGER: '위험',
+    EMERGENCY: '긴급',
+    LIFE: '생활',
+  }[filter] || '전체'
+}
+
+function isGenericAlertFilterText(text) {
+  const value = normalize(text)
+  if (value.includes('세탁완료') || value.includes('긴급도움요청')) return false
+  return [
+    '전체알림',
+    '모든알림',
+    '미확인알림',
+    '안읽은알림',
+    '위험알림',
+    '위험한알림',
+    '긴급알림',
+    '생활알림',
+    '세탁알림',
+  ].some((keyword) => value.includes(keyword))
+}
+
+function findAlertsFromText(text, alerts = []) {
+  const value = normalize(text)
+  const query = cleanAlertQuery(text)
+  const candidates = alerts.filter(Boolean)
+  const exactMatches = candidates.filter((alert) => {
+    const title = normalize(alert.title)
+    return title && (value.includes(title) || query.includes(title))
+  })
+  if (exactMatches.length > 0) return sortAlertsByTime(exactMatches)
+
+  const looseMatches = candidates.filter((alert) => {
+    const searchable = [
+      alert.title,
+      alert.message,
+      alert.category,
+      alert.deviceName,
+      alert.type,
+    ].map(normalize).filter(Boolean).join(' ')
+    return query && searchable.includes(query)
+  })
+  if (looseMatches.length > 0) return sortAlertsByTime(looseMatches)
+
+  if (value.includes('세탁완료')) {
+    return sortAlertsByTime(candidates.filter((alert) => normalize(alert.title).includes('세탁완료')))
+  }
+  if (value.includes('긴급도움요청')) {
+    return sortAlertsByTime(candidates.filter((alert) => normalize(alert.title).includes('긴급도움요청')))
+  }
+  return []
+}
+
+function cleanAlertQuery(text) {
+  return normalize(text)
+    .replace(/알림/g, '')
+    .replace(/상세/g, '')
+    .replace(/보기/g, '')
+    .replace(/자세히/g, '')
+    .replace(/알려줘/g, '')
+    .replace(/읽어줘/g, '')
+    .replace(/삭제/g, '')
+    .replace(/지워/g, '')
+    .replace(/확인완료/g, '')
+    .replace(/확인/g, '')
+    .replace(/처리/g, '')
+    .replace(/해줘/g, '')
+}
+
+function sortAlertsByTime(alerts = []) {
+  return [...alerts].sort((a, b) => new Date(b.occurredAt || 0) - new Date(a.occurredAt || 0))
+}
+
+function selectNumberedAlert(text, matches = []) {
+  const value = normalize(text)
+  const number = Number(value.match(/\d+/)?.[0])
+  if (number >= 1 && number <= matches.length) return matches[number - 1]
+  if (value.includes('첫') || value.includes('첫번째') || value.includes('첫째')) return matches[0]
+  if (value.includes('두') || value.includes('두번째') || value.includes('둘째')) return matches[1]
+  if (value.includes('세') || value.includes('세번째') || value.includes('셋째')) return matches[2]
+  return null
+}
+
+function formatAlertTimeText(value) {
+  if (!value) return '시간 정보 없음'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '시간 정보 없음'
+  return new Intl.DateTimeFormat('ko-KR', {
+    month: 'long',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(date)
+}
+
+function remainingAlertsText(alerts = []) {
+  if (alerts.length === 0) return '현재 남은 알림은 없습니다.'
+  const counts = alerts.reduce((acc, alert) => {
+    const key = alert.type === 'EMERGENCY' ? '긴급' : alert.type === 'DANGER' ? '위험' : alert.type === 'LIFE' ? '생활' : '기타'
+    acc[key] = (acc[key] || 0) + 1
+    return acc
+  }, {})
+  const summary = Object.entries(counts).map(([label, count]) => `${label} 알림 ${count}건`).join(', ')
+  return `현재 남은 알림은 ${summary}입니다.`
+}
+
+function formatAlertFilterResult(result) {
+  if (!result.success) return resultFailureText(result)
+  const filter = result.data?.filter || 'ALL'
+  const count = result.affectedCount ?? result.data?.alerts?.length ?? 0
+  return `${alertFilterLabel(filter)} 알림 화면으로 변경했습니다. ${alertFilterLabel(filter)} 알림은 ${count}건입니다.`
 }
 
 function askOrUnsupported(task, responseText) {
@@ -472,9 +724,37 @@ function classifyControlIntent(text) {
   return null
 }
 
+function classifyAlertIntent(text) {
+  const value = normalize(text)
+  const mentionsAlert = value.includes('알림') || value.includes('긴급도움요청') || value.includes('세탁완료')
+  if (!mentionsAlert) return null
+
+  if (value.includes('삭제') || value.includes('지워')) {
+    return isGenericAlertFilterText(text) ? VOICE_INTENTS.DELETE_ALERTS_BY_FILTER : VOICE_INTENTS.DELETE_ALERT
+  }
+
+  if (value.includes('확인완료') || value.includes('읽음') || (value.includes('확인') && value.includes('처리'))) {
+    return isGenericAlertFilterText(text) ? VOICE_INTENTS.CONFIRM_ALERTS_BY_FILTER : VOICE_INTENTS.CONFIRM_ALERT
+  }
+
+  if (value.includes('상세') || value.includes('자세히')) return VOICE_INTENTS.READ_ALERT_DETAIL
+
+  if (value.includes('보여줘') || value.includes('보여') || value.includes('필터') || value.includes('화면')) {
+    return VOICE_INTENTS.FILTER_ALERTS
+  }
+
+  if (value.includes('읽') || value.includes('알려') || value.includes('조회') || value.includes('최근')) {
+    return VOICE_INTENTS.LIST_ALERTS
+  }
+
+  return VOICE_INTENTS.LIST_ALERTS
+}
+
 function classifyIntent(text) {
   const value = normalize(text)
   if (value.includes('도움') || value.includes('뭐할수')) return VOICE_INTENTS.HELP
+  const alertIntent = classifyAlertIntent(text)
+  if (alertIntent) return alertIntent
   if (value.includes('긴급') || value.includes('sos') || value.includes('도움요청')) return VOICE_INTENTS.SEND_SOS
   if (value.includes('알림') && (value.includes('읽') || value.includes('확인') || value.includes('알려'))) return value.includes('처리') ? VOICE_INTENTS.CONFIRM_ALERT : VOICE_INTENTS.READ_ALERTS
   if (value.includes('가전') && (value.includes('목록') || value.includes('뭐') || value.includes('연결된'))) return VOICE_INTENTS.LIST_DEVICES

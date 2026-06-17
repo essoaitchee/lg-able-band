@@ -5,6 +5,7 @@ import com.lgableband.common.AlertStatus;
 import com.lgableband.common.AlertType;
 import java.util.List;
 import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -61,6 +62,11 @@ public class AlertController {
 			response.replay() == null ? null : response.replay().voiceGuide(),
 			response.replay() == null ? null : response.replay().replayedAt()
 		);
+	}
+
+	@DeleteMapping("/{alertId}")
+	public AlertService.DeleteResponse delete(@RequestHeader("Authorization") String authorization, @PathVariable long alertId) {
+		return this.alertService.delete(authorization, alertId);
 	}
 
 	public record AlertListResponse(List<AlertService.AlertView> items) {

@@ -259,6 +259,16 @@ public class MockDataStore {
 		return updateAlertStatus(userId, alertId, AlertStatus.REPLAYED);
 	}
 
+	public void deleteAlert(long userId, long alertId) {
+		List<Alert> alerts = this.alertsByUserId.getOrDefault(userId, new ArrayList<>());
+		boolean removed = alerts.removeIf(alert -> alert.alertId() == alertId);
+		if (!removed) {
+			throw new ApiException(HttpStatus.NOT_FOUND, "RESOURCE_NOT_FOUND", "알림을 찾을 수 없습니다.");
+		}
+		this.eventsByUserId.getOrDefault(userId, new ArrayList<>())
+			.removeIf(event -> event.alertId() == alertId);
+	}
+
 	private Alert updateAlertStatus(long userId, long alertId, AlertStatus status) {
 		List<Alert> alerts = this.alertsByUserId.getOrDefault(userId, new ArrayList<>());
 		for (int index = 0; index < alerts.size(); index++) {

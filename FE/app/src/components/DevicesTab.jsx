@@ -1,6 +1,6 @@
 ﻿import { useEffect, useMemo, useState } from 'react'
 import { useBleProximityGuide } from '../features/ble/useBleProximityGuide'
-import { createDevice } from '../services/deviceService'
+import { createDevice, getDevices } from '../services/deviceService'
 
 function scrollAppContentToTop() {
   const appContent = document.querySelector('.app-content')
@@ -129,6 +129,7 @@ export function DevicesTab({ devices = [], uwb }) {
   const isGuidingCurrentTarget = Boolean(
     uwbTarget && bleGuide.isActive && bleGuide.targetName === uwbTarget.name,
   )
+
   useEffect(() => {
     if (!connectionMessage) {
       return undefined
@@ -264,10 +265,32 @@ export function DevicesTab({ devices = [], uwb }) {
       setConnectionMessage(`${nextDevice.name}를 연결했습니다.`)
       setSubmitState({ saving: false, error: '' })
     } catch (error) {
+      if (error.code === 'DUPLICATED_DEVICE') {
+        await syncConnectedDevices()
+      }
+
       setSubmitState({
         saving: false,
         error: error.message || '가전 연결에 실패했습니다.',
       })
+    }
+  }
+
+  async function syncConnectedDevices() {
+    try {
+      const latestDevices = await getDevices()
+      const nextDevices = latestDevices.map((device) => enrichDevice(device, catalogByType))
+      setConnectedDevices(nextDevices)
+      setSelectedDeviceId((currentDeviceId) => {
+        if (nextDevices.some((device) => device.deviceId === currentDeviceId)) {
+          return currentDeviceId
+        }
+
+        const connectedDraft = nextDevices.find((device) => isSameVendorDevice(device, draft))
+        return connectedDraft?.deviceId ?? nextDevices[0]?.deviceId ?? null
+      })
+    } catch {
+      // Keep the current screen state; the visible error already explains the failed action.
     }
   }
 
@@ -598,19 +621,28 @@ function createEmptyDraft() {
 }
 
 function getDeviceVendorId(device) {
-  return (device?.vendorDeviceId || device?.defaultVendorDeviceId || '').trim()
+  const vendorDeviceId = (device?.vendorDeviceId || '').trim()
+
+  if (vendorDeviceId.startsWith('admin-demo-')) {
+    return (device?.defaultVendorDeviceId || vendorDeviceId).trim()
+  }
+
+  return (vendorDeviceId || device?.defaultVendorDeviceId || '').trim()
+}
+
+function isSameVendorDevice(device, selectedDevice) {
+  const deviceVendorDeviceId = getDeviceVendorId(device)
+  const selectedVendorDeviceId = getDeviceVendorId(selectedDevice)
+
+  return Boolean(
+    deviceVendorDeviceId &&
+      selectedVendorDeviceId &&
+      deviceVendorDeviceId === selectedVendorDeviceId,
+  )
 }
 
 function isDeviceConnected(connectedDevices, selectedDevice) {
-  const selectedVendorDeviceId = getDeviceVendorId(selectedDevice)
-
-  if (!selectedVendorDeviceId) {
-    return false
-  }
-
-  return connectedDevices.some(
-    (device) => getDeviceVendorId(device) === selectedVendorDeviceId,
-  )
+  return connectedDevices.some((device) => isSameVendorDevice(device, selectedDevice))
 }
 
 function enrichDevice(device, catalogByType) {
@@ -619,6 +651,7 @@ function enrichDevice(device, catalogByType) {
   return {
     ...template,
     ...device,
+    vendorDeviceId: getDeviceVendorId({ ...template, ...device }),
     room: device.room || template.room,
     typeLabel: device.typeLabel || template.typeLabel,
     detail: device.detail || template.detail,
