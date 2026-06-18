@@ -16,6 +16,30 @@ export async function linkGuardianByEmail({ email, isPrimary = false, notifyOnDa
   })
 }
 
+export async function createGuardian({ name, phone, isPrimary = false, notifyOnDanger = true }) {
+  return apiRequest('/api/guardians', {
+    method: 'POST',
+    body: {
+      name,
+      phone,
+      isPrimary,
+      notifyOnDanger,
+    },
+  })
+}
+
+export async function updateGuardian(guardianId, { name, phone, isPrimary = false, notifyOnDanger = true }) {
+  return apiRequest(`/api/guardians/${guardianId}`, {
+    method: 'PUT',
+    body: {
+      name,
+      phone,
+      isPrimary,
+      notifyOnDanger,
+    },
+  })
+}
+
 export async function deleteGuardian(guardianId) {
   return apiRequest(`/api/guardians/${guardianId}`, {
     method: 'DELETE',
