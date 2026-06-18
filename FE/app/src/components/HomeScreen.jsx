@@ -4,7 +4,12 @@ import { LivingSignalSettingsScreen } from '../features/living-signal'
 import { getAccessibilitySettings, updateAccessibilitySettings } from '../services/accessibilityService'
 import { getAppPreview, getHomeSummary } from '../services/homeService'
 import { createEmergencyRequest } from '../services/emergencyService'
-import { deleteGuardian, getGuardians, linkGuardianByEmail } from '../services/guardianService'
+import {
+  createGuardian,
+  deleteGuardian,
+  getGuardians,
+  updateGuardian,
+} from '../services/guardianService'
 import { AlertsTab } from './AlertsTab'
 import { DevicesTab } from './DevicesTab'
 import { HomeTab } from './HomeTab'
@@ -147,8 +152,12 @@ export function HomeScreen({ session, onLogout }) {
       return '생활 신호 설정'
     }
 
-    if (activeTab === 'menu' && menuScreen === 'guardianConnection') {
-      return '보호자 연결'
+    if (activeTab === 'menu' && menuScreen === 'guardianInvite') {
+      return '보호자 초대'
+    }
+
+    if (activeTab === 'menu' && menuScreen === 'guardianManagement') {
+      return '보호자 관리'
     }
 
     if (activeTab === 'menu' && menuScreen === 'wearablePairing') {
@@ -257,8 +266,14 @@ export function HomeScreen({ session, onLogout }) {
     })
   }
 
-  async function handleLinkGuardian(form) {
-    const guardian = normalizeGuardianForView(await linkGuardianByEmail(form))
+  async function handleCreateGuardian(form) {
+    const guardian = normalizeGuardianForView(await createGuardian(form))
+    setLinkedGuardians((current) => upsertGuardian(current, guardian))
+    return guardian
+  }
+
+  async function handleUpdateGuardian(guardianId, updates) {
+    const guardian = normalizeGuardianForView(await updateGuardian(guardianId, updates))
     setLinkedGuardians((current) => upsertGuardian(current, guardian))
     return guardian
   }
@@ -375,7 +390,8 @@ export function HomeScreen({ session, onLogout }) {
             guardians={linkedGuardians}
             livingSignals={preview.livingSignals}
             onAccessibilityChange={handleAccessibilityChange}
-            onOpenGuardianConnection={() => setMenuScreen('guardianConnection')}
+            onOpenGuardianInvite={() => setMenuScreen('guardianInvite')}
+            onOpenGuardianManagement={() => setMenuScreen('guardianManagement')}
             onOpenLivingSignals={() => setMenuScreen('livingSignals')}
             onOpenWearablePairing={() => setMenuScreen('wearablePairing')}
             onLogout={onLogout}
@@ -388,13 +404,21 @@ export function HomeScreen({ session, onLogout }) {
             onBack={() => setMenuScreen('root')}
           />
         ) : null}
-        {activeTab === 'menu' && menuScreen === 'guardianConnection' ? (
-          <GuardianConnectionScreen
+        {activeTab === 'menu' && menuScreen === 'guardianInvite' ? (
+          <GuardianInviteScreen
             guardians={linkedGuardians}
             guardianListState={guardianListState}
             onBack={() => setMenuScreen('root')}
-            onLinkGuardian={handleLinkGuardian}
+            onCreateGuardian={handleCreateGuardian}
+          />
+        ) : null}
+        {activeTab === 'menu' && menuScreen === 'guardianManagement' ? (
+          <GuardianManagementScreen
+            guardians={linkedGuardians}
+            guardianListState={guardianListState}
+            onBack={() => setMenuScreen('root')}
             onRemoveGuardian={handleDeleteGuardian}
+            onUpdateGuardian={handleUpdateGuardian}
           />
         ) : null}
         {activeTab === 'menu' && menuScreen === 'wearablePairing' ? (
@@ -477,7 +501,8 @@ function MenuTab({
   guardians,
   livingSignals,
   onAccessibilityChange,
-  onOpenGuardianConnection,
+  onOpenGuardianInvite,
+  onOpenGuardianManagement,
   onOpenLivingSignals,
   onOpenWearablePairing,
   onLogout,
@@ -591,7 +616,7 @@ function MenuTab({
             className="device-inline-add-button guardian-manage-button"
             type="button"
             aria-label="홈 멤버 관리"
-            onClick={onOpenGuardianConnection}
+            onClick={onOpenGuardianManagement}
           >
             관리
           </button>
@@ -601,7 +626,7 @@ function MenuTab({
           <button
             className="home-member-item invite"
             type="button"
-            onClick={onOpenGuardianConnection}
+            onClick={onOpenGuardianInvite}
           >
             <span className="member-avatar invite-avatar" aria-hidden="true">
               +
@@ -1085,23 +1110,18 @@ function formatPairingResult(rawValue) {
   return `${pairing.deviceName} · ${pairing.deviceId} · ${pairing.pairingCode}`
 }
 
-function GuardianConnectionScreen({
-  guardians,
-  guardianListState,
-  onBack,
-  onLinkGuardian,
-  onRemoveGuardian,
-}) {
+function GuardianInviteScreen({ guardians, guardianListState, onBack, onCreateGuardian }) {
   const [form, setForm] = useState({
-    email: '',
-    isPrimary: guardians.length === 0,
+    name: '',
+    phone: '',
+    isPrimary: false,
     notifyOnDanger: true,
   })
   const [message, setMessage] = useState({ tone: '', text: '' })
   const [toastKey, setToastKey] = useState(0)
   const [submitting, setSubmitting] = useState(false)
-  const [deletingGuardianId, setDeletingGuardianId] = useState(null)
-  const isPrimaryChecked = guardians.length === 0 || form.isPrimary
+  const hasNoGuardians = !guardianListState.loading && guardians.length === 0
+  const isPrimaryChecked = hasNoGuardians || form.isPrimary
 
   useEffect(() => {
     if (!message.text) {
@@ -1131,80 +1151,82 @@ function GuardianConnectionScreen({
   async function handleSubmit(event) {
     event.preventDefault()
 
-    const email = form.email.trim()
+    const name = form.name.trim()
+    const phone = form.phone.trim()
 
-    if (!email) {
-      showMessage('error', '보호자 계정 이메일을 입력해주세요.')
+    if (!name) {
+      showMessage('error', '보호자 이름을 입력해 주세요.')
       return
     }
 
-    if (!isValidEmail(email)) {
-      showMessage('error', '올바른 이메일 형식으로 입력해주세요.')
+    if (!phone) {
+      showMessage('error', '보호자 연락처를 입력해 주세요.')
+      return
+    }
+
+    if (guardianListState.loading) {
+      showMessage('error', '보호자 목록을 확인한 뒤 다시 시도해 주세요.')
       return
     }
 
     setSubmitting(true)
     try {
-      const guardian = await onLinkGuardian({
-        email,
+      const guardian = await onCreateGuardian({
+        name,
+        phone,
         isPrimary: isPrimaryChecked,
         notifyOnDanger: form.notifyOnDanger,
       })
-      showMessage('success', `${guardian.name || '보호자'} 보호자와 연결했습니다.`)
+      showMessage('success', `${guardian.name || '보호자'} 보호자를 등록했습니다.`)
       setForm((current) => ({
         ...current,
-        email: '',
+        name: '',
+        phone: '',
         isPrimary: false,
       }))
     } catch (error) {
-      showMessage('error', error.message || '보호자 연결을 저장하지 못했습니다.')
+      showMessage('error', error.message || '보호자 등록을 저장하지 못했습니다.')
     } finally {
       setSubmitting(false)
     }
   }
 
-  async function handleRemoveGuardian(guardian) {
-    if (deletingGuardianId) {
-      return
-    }
-
-    setDeletingGuardianId(guardian.guardianId)
-    setMessage({ tone: '', text: '' })
-    try {
-      await onRemoveGuardian(guardian.guardianId)
-      showMessage('success', `${guardian.name} 보호자 연결을 해제했습니다.`)
-    } catch (error) {
-      showMessage('error', error.message || '보호자 연결을 해제하지 못했습니다.')
-    } finally {
-      setDeletingGuardianId(null)
-    }
-  }
-
   return (
-    <section className="tab-stack guardian-connection-screen" aria-labelledby="guardian-connection-title">
+    <section className="tab-stack guardian-connection-screen" aria-labelledby="guardian-invite-title">
       <form className="content-card guardian-form-card" onSubmit={handleSubmit}>
         <div className="guardian-form-hero device-add-hero">
           <button
             className="text-button back-button alert-detail-back"
             type="button"
-            aria-label="목록으로 돌아가기"
+            aria-label="메뉴로 돌아가기"
             onClick={onBack}
           >
             <span aria-hidden="true">←</span>
           </button>
-          <strong className="card-title" id="guardian-connection-title">
-            알림 받을 보호자를 등록해 주세요.
+          <strong className="card-title" id="guardian-invite-title">
+            보호자 초대
           </strong>
         </div>
 
         <label className="field">
-          <span>보호자 이메일</span>
+          <span>보호자 이름</span>
           <input
-            type="email"
-            value={form.email}
-            onChange={(event) => handleChange('email', event.target.value)}
-            placeholder="guardian@example.com"
-            autoComplete="email"
+            type="text"
+            value={form.name}
+            onChange={(event) => handleChange('name', event.target.value)}
+            placeholder="예: 김보호"
+            autoComplete="name"
+          />
+        </label>
+
+        <label className="field">
+          <span>보호자 연락처</span>
+          <input
+            type="tel"
+            value={form.phone}
+            onChange={(event) => handleChange('phone', event.target.value)}
+            placeholder="010-0000-0000"
+            autoComplete="tel"
           />
         </label>
 
@@ -1213,7 +1235,7 @@ function GuardianConnectionScreen({
             <input
               type="checkbox"
               checked={isPrimaryChecked}
-              disabled={guardians.length === 0}
+              disabled={hasNoGuardians || guardianListState.loading}
               onChange={(event) => handleChange('isPrimary', event.target.checked)}
             />
             <span>
@@ -1234,14 +1256,169 @@ function GuardianConnectionScreen({
           </label>
         </div>
 
-        <button className="primary-button full-button" type="submit" disabled={submitting}>
-          {submitting ? '연결 중...' : '보호자 등록'}
+        {guardianListState.loading ? (
+          <p className="member-status-message" role="status">
+            보호자 목록을 확인하는 중입니다.
+          </p>
+        ) : null}
+
+        {guardianListState.error ? (
+          <p className="member-status-message error" role="alert">
+            {guardianListState.error}
+          </p>
+        ) : null}
+
+        <button
+          className="primary-button full-button"
+          type="submit"
+          disabled={submitting || guardianListState.loading}
+        >
+          {submitting ? '등록 중...' : '보호자 등록'}
         </button>
       </form>
 
+      {message.text ? (
+        <GuardianToast key={toastKey} message={message} />
+      ) : null}
+    </section>
+  )
+}
+
+function GuardianManagementScreen({
+  guardians,
+  guardianListState,
+  onBack,
+  onRemoveGuardian,
+  onUpdateGuardian,
+}) {
+  const [drafts, setDrafts] = useState({})
+  const [message, setMessage] = useState({ tone: '', text: '' })
+  const [toastKey, setToastKey] = useState(0)
+  const [savingGuardianId, setSavingGuardianId] = useState(null)
+  const [deletingGuardianId, setDeletingGuardianId] = useState(null)
+  const [confirmingDeleteId, setConfirmingDeleteId] = useState(null)
+
+  useEffect(() => {
+    if (!message.text) {
+      return undefined
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setMessage({ tone: '', text: '' })
+    }, 2400)
+
+    return () => window.clearTimeout(timeoutId)
+  }, [message])
+
+  function showMessage(tone, text) {
+    setToastKey((current) => current + 1)
+    setMessage({ tone, text })
+  }
+
+  function updateDraft(guardian, field, value) {
+    const guardianKey = getGuardianKey(guardian)
+    setDrafts((current) => ({
+      ...current,
+      [guardianKey]: {
+        ...createGuardianDraft(guardian),
+        ...current[guardianKey],
+        [field]: value,
+      },
+    }))
+    setConfirmingDeleteId(null)
+    setMessage({ tone: '', text: '' })
+  }
+
+  async function handleSaveGuardian(guardian, overrides = {}) {
+    const guardianKey = getGuardianKey(guardian)
+    const draft = {
+      ...createGuardianDraft(guardian),
+      ...drafts[guardianKey],
+      ...overrides,
+    }
+    const name = draft.name.trim()
+    const phone = draft.phone.trim()
+
+    if (!name) {
+      showMessage('error', '보호자 이름을 입력해 주세요.')
+      return null
+    }
+
+    if (!phone) {
+      showMessage('error', '보호자 연락처를 입력해 주세요.')
+      return null
+    }
+
+    setSavingGuardianId(guardian.guardianId)
+    setConfirmingDeleteId(null)
+    setMessage({ tone: '', text: '' })
+    try {
+      const savedGuardian = await onUpdateGuardian(guardian.guardianId, {
+        name,
+        phone,
+        isPrimary: Boolean(draft.isPrimary),
+        notifyOnDanger: Boolean(draft.notifyOnDanger),
+      })
+      showMessage('success', `${savedGuardian.name || name} 보호자 정보를 저장했습니다.`)
+      setDrafts((current) => {
+        const nextDrafts = { ...current }
+        delete nextDrafts[guardianKey]
+        return nextDrafts
+      })
+      return savedGuardian
+    } catch (error) {
+      showMessage('error', error.message || '보호자 정보를 저장하지 못했습니다.')
+      return null
+    } finally {
+      setSavingGuardianId(null)
+    }
+  }
+
+  async function handleRemoveGuardian(guardian) {
+    if (deletingGuardianId) {
+      return
+    }
+
+    setDeletingGuardianId(guardian.guardianId)
+    setMessage({ tone: '', text: '' })
+    try {
+      await onRemoveGuardian(guardian.guardianId)
+      setDrafts((current) => {
+        const nextDrafts = { ...current }
+        delete nextDrafts[getGuardianKey(guardian)]
+        return nextDrafts
+      })
+      setConfirmingDeleteId(null)
+      showMessage('success', `${guardian.name} 보호자를 삭제했습니다.`)
+    } catch (error) {
+      showMessage('error', error.message || '보호자를 삭제하지 못했습니다.')
+    } finally {
+      setDeletingGuardianId(null)
+    }
+  }
+
+  return (
+    <section className="tab-stack guardian-connection-screen" aria-labelledby="guardian-management-title">
+      <div className="section-title-row">
+        <button
+          className="text-button back-button alert-detail-back"
+          type="button"
+          aria-label="메뉴로 돌아가기"
+          onClick={onBack}
+        >
+          <span aria-hidden="true">←</span>
+        </button>
+        <div>
+          <p className="card-label">보호자 연결</p>
+          <strong className="card-title" id="guardian-management-title">
+            보호자 관리
+          </strong>
+        </div>
+      </div>
+
       <section className="content-card connected-guardian-card" aria-labelledby="connected-guardian-title">
         <div className="section-title-row">
-          <strong className="card-title" id="connected-guardian-title">연결된 보호자</strong>
+          <strong className="card-title" id="connected-guardian-title">등록된 보호자</strong>
           <span>{guardians.length}명</span>
         </div>
 
@@ -1259,27 +1436,109 @@ function GuardianConnectionScreen({
 
         {guardians.length > 0 ? (
           <div className="connected-guardian-list">
-            {guardians.map((guardian) => (
-              <article className="connected-guardian-item" key={guardian.guardianId || guardian.name}>
-                <p>{guardian.isPrimary ? '대표 보호자' : guardian.relation || '보호자'}</p>
-                <strong>{guardian.name}</strong>
-                <span>{guardian.phone || '연락처 미등록'}</span>
-                <div>
-                  <span className="guardian-chip">
-                    {formatConnectionStatus(guardian.connectionStatus)}
-                  </span>
-                  {guardian.notifyOnDanger ? <span className="guardian-chip">긴급 알림 ON</span> : null}
-                </div>
-                <button
-                  className="secondary-button full-button"
-                  type="button"
-                  disabled={deletingGuardianId === guardian.guardianId}
-                  onClick={() => handleRemoveGuardian(guardian)}
-                >
-                  {deletingGuardianId === guardian.guardianId ? '해제 중...' : '연결 해제'}
-                </button>
-              </article>
-            ))}
+            {guardians.map((guardian) => {
+              const guardianKey = getGuardianKey(guardian)
+              const draft = {
+                ...createGuardianDraft(guardian),
+                ...drafts[guardianKey],
+              }
+              const isSaving = savingGuardianId === guardian.guardianId
+              const isDeleting = deletingGuardianId === guardian.guardianId
+              const isConfirmingDelete = confirmingDeleteId === guardian.guardianId
+
+              return (
+                <article className="connected-guardian-item" key={guardianKey}>
+                  <p>{guardian.isPrimary ? '대표 보호자' : guardian.relation || '보호자'}</p>
+                  <strong>{guardian.name}</strong>
+                  <span>{guardian.phone || '연락처 미등록'}</span>
+                  <div>
+                    <span className="guardian-chip">
+                      {formatConnectionStatus(guardian.connectionStatus)}
+                    </span>
+                    {guardian.notifyOnDanger ? <span className="guardian-chip">긴급 알림 ON</span> : null}
+                  </div>
+
+                  <label className="field compact-field">
+                    <span>이름 수정</span>
+                    <input
+                      type="text"
+                      value={draft.name}
+                      aria-label={`${guardian.name} 이름 수정`}
+                      onChange={(event) => updateDraft(guardian, 'name', event.target.value)}
+                    />
+                  </label>
+                  <label className="field compact-field">
+                    <span>연락처 수정</span>
+                    <input
+                      type="tel"
+                      value={draft.phone}
+                      aria-label={`${guardian.name} 연락처 수정`}
+                      onChange={(event) => updateDraft(guardian, 'phone', event.target.value)}
+                    />
+                  </label>
+
+                  <div className="guardian-option-grid">
+                    <label className="guardian-option-card">
+                      <input
+                        type="checkbox"
+                        checked={draft.notifyOnDanger}
+                        aria-label={`${guardian.name} 위험 알림 수신`}
+                        disabled={isSaving || isDeleting}
+                        onChange={(event) =>
+                          handleSaveGuardian(guardian, {
+                            notifyOnDanger: event.target.checked,
+                          })
+                        }
+                      />
+                      <span>
+                        <strong>위험 알림 수신</strong>
+                        위험 알림을 전달합니다.
+                      </span>
+                    </label>
+                    {!guardian.isPrimary ? (
+                      <button
+                        className="secondary-button full-button"
+                        type="button"
+                        aria-label={`${guardian.name} 대표로 설정`}
+                        disabled={isSaving || isDeleting}
+                        onClick={() => handleSaveGuardian(guardian, { isPrimary: true })}
+                      >
+                        대표로 설정
+                      </button>
+                    ) : null}
+                  </div>
+
+                  <button
+                    className="primary-button full-button"
+                    type="button"
+                    aria-label={`${guardian.name} 수정 저장`}
+                    disabled={isSaving || isDeleting}
+                    onClick={() => handleSaveGuardian(guardian)}
+                  >
+                    {isSaving ? '저장 중...' : '수정 저장'}
+                  </button>
+                  <button
+                    className="secondary-button full-button"
+                    type="button"
+                    aria-label={
+                      isConfirmingDelete ? `${guardian.name} 삭제 확인` : `${guardian.name} 삭제`
+                    }
+                    disabled={isSaving || isDeleting}
+                    onClick={() => {
+                      if (isConfirmingDelete) {
+                        handleRemoveGuardian(guardian)
+                        return
+                      }
+
+                      setConfirmingDeleteId(guardian.guardianId)
+                      showMessage('error', `${guardian.name} 보호자를 삭제하려면 한 번 더 눌러주세요.`)
+                    }}
+                  >
+                    {isDeleting ? '삭제 중...' : isConfirmingDelete ? '삭제 확인' : '삭제'}
+                  </button>
+                </article>
+              )
+            })}
           </div>
         ) : (
           <p className="empty-state">아직 연결된 보호자가 없습니다.</p>
@@ -1287,24 +1546,29 @@ function GuardianConnectionScreen({
       </section>
 
       {message.text ? (
-        <div
-          key={toastKey}
-          className="device-toast guardian-toast"
-          role={message.tone === 'error' ? 'alert' : 'status'}
-          aria-live={message.tone === 'error' ? 'assertive' : 'polite'}
-        >
-          <p
-            className={
-              message.tone === 'error'
-                ? 'device-toast-message guardian-toast-message guardian-toast-message-error'
-                : 'device-toast-message guardian-toast-message'
-            }
-          >
-            {message.text}
-          </p>
-        </div>
+        <GuardianToast key={toastKey} message={message} />
       ) : null}
     </section>
+  )
+}
+
+function GuardianToast({ message }) {
+  return (
+    <div
+      className="device-toast guardian-toast"
+      role={message.tone === 'error' ? 'alert' : 'status'}
+      aria-live={message.tone === 'error' ? 'assertive' : 'polite'}
+    >
+      <p
+        className={
+          message.tone === 'error'
+            ? 'device-toast-message guardian-toast-message guardian-toast-message-error'
+            : 'device-toast-message guardian-toast-message'
+        }
+      >
+        {message.text}
+      </p>
+    </div>
   )
 }
 
@@ -1314,6 +1578,19 @@ function normalizeGuardianForView(guardian) {
     relation: guardian.relation || guardian.relationship || '가족',
     status: formatConnectionStatus(guardian.connectionStatus || guardian.status),
     connectionStatus: guardian.connectionStatus || guardian.status || 'CONNECTED',
+  }
+}
+
+function getGuardianKey(guardian) {
+  return String(guardian.guardianId || guardian.name || guardian.phone || 'guardian')
+}
+
+function createGuardianDraft(guardian) {
+  return {
+    name: guardian.name || '',
+    phone: guardian.phone || '',
+    isPrimary: Boolean(guardian.isPrimary),
+    notifyOnDanger: Boolean(guardian.notifyOnDanger),
   }
 }
 
@@ -1328,8 +1605,4 @@ function upsertGuardian(currentGuardians, guardian) {
 
 function formatConnectionStatus(status) {
   return connectionStatusLabels[status] || status || '연결됨'
-}
-
-function isValidEmail(email) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
 }
