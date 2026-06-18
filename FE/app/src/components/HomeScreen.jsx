@@ -265,10 +265,15 @@ export function HomeScreen({ session, onLogout }) {
             <h1 id="home-title">{displayTitle}</h1>
             {activeTab === 'alerts' ? (
               <button
-                className="alert-header-stats-icon"
+                className={
+                  alertsScreen === 'stats'
+                    ? 'alert-header-stats-icon alert-header-stats-icon-selected'
+                    : 'alert-header-stats-icon'
+                }
                 type="button"
                 aria-label="알림 통계 보기"
-                onClick={() => setAlertsScreen('stats')}
+                aria-pressed={alertsScreen === 'stats'}
+                onClick={() => setAlertsScreen((current) => (current === 'stats' ? 'list' : 'stats'))}
               >
                 <svg viewBox="0 0 24 24" focusable="false">
                   <path d="M5 19V10" />
