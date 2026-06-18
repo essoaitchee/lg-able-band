@@ -11,6 +11,7 @@ import { HomeTab } from './HomeTab'
 import { CHATBOT_INTERRUPT_EVENT, VoiceChatbot } from './VoiceChatbot'
 import { completeWearablePairing } from '../services/wearablePairingService'
 import {
+  getEmergencyAvailability,
   getSafetyStatusDisplay,
   mergeAlertStatusIntoHomeSummary,
   updateAlertsWithStatus,
@@ -186,8 +187,14 @@ export function HomeScreen({ session, onLogout }) {
     }
   }
 
-  async function handleEmergencyRequest() {
+  async function handleEmergencyRequest(emergencyAvailability) {
     if (emergencySubmitting) {
+      return
+    }
+
+    const availability = emergencyAvailability || getEmergencyAvailability(homeState.summary)
+    if (!availability.canRequest) {
+      setEmergencyMessage(availability.reason)
       return
     }
 

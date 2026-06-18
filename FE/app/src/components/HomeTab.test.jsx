@@ -62,16 +62,26 @@ describe('HomeTab', () => {
     expect(screen.getByText('주의/오류 없음')).toBeTruthy()
   })
 
-  it('shows the SOS disabled reason from home availability data', () => {
-    renderHomeTab()
+  it('keeps the SOS button clickable when a guardian must be registered first', async () => {
+    const user = userEvent.setup()
+    const handleEmergencyRequest = vi.fn()
+    renderHomeTab(baseSummary, { onEmergencyRequest: handleEmergencyRequest })
 
     const sosButton = screen.getByRole('button', { name: '긴급 지원 요청' })
 
-    expect(sosButton.disabled).toBe(true)
-    expect(screen.getByRole('status').textContent).toContain('보호자를 등록')
+    expect(sosButton.disabled).toBe(false)
+
+    await user.click(sosButton)
+
+    expect(handleEmergencyRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        canRequest: false,
+        reason: expect.stringContaining('보호자를 등록'),
+      }),
+    )
   })
 
-  it('calls the emergency request action only when SOS is available', async () => {
+  it('sends the emergency request action when SOS is available', async () => {
     const user = userEvent.setup()
     const handleEmergencyRequest = vi.fn()
     renderHomeTab(

@@ -26,9 +26,12 @@ export function HomeTab({
   const alertMetrics = createHomeAlertMetrics(summary.recentAlerts)
   const updatedAtLabel = formatStatusUpdatedAt(summary.safetyStatus.lastCheckedAt)
   const emergencyAvailability = getEmergencyAvailability(summary)
-  const emergencyStatusMessage =
-    emergencyMessage || (!emergencyAvailability.canRequest ? emergencyAvailability.reason : '')
+  const emergencyStatusMessage = emergencyMessage
   const deviceWarningSummary = getDeviceWarningSummary(summary.deviceSummary)
+
+  function handleEmergencyClick() {
+    onEmergencyRequest(emergencyAvailability)
+  }
 
   return (
     <>
@@ -63,8 +66,8 @@ export function HomeTab({
           className="sos-button"
           type="button"
           aria-busy={emergencySubmitting}
-          disabled={!emergencyAvailability.canRequest || emergencySubmitting}
-          onClick={onEmergencyRequest}
+          disabled={emergencySubmitting}
+          onClick={handleEmergencyClick}
         >
           {emergencySubmitting ? '요청 전송 중...' : '긴급 지원 요청'}
         </button>
