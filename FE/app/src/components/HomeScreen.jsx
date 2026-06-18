@@ -1,5 +1,5 @@
 import jsQR from 'jsqr'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { LivingSignalSettingsScreen } from '../features/living-signal'
 import { getAccessibilitySettings, updateAccessibilitySettings } from '../services/accessibilityService'
 import { getAppPreview, getHomeSummary } from '../services/homeService'
@@ -66,6 +66,10 @@ export function HomeScreen({ session, onLogout }) {
   })
   const [emergencyMessage, setEmergencyMessage] = useState('')
   const [emergencySubmitting, setEmergencySubmitting] = useState(false)
+  const [homeRefreshState, setHomeRefreshState] = useState({
+    refreshing: false,
+    error: '',
+  })
   const [homeState, setHomeState] = useState({
     loading: true,
     error: '',
@@ -73,31 +77,38 @@ export function HomeScreen({ session, onLogout }) {
     preview: null,
   })
 
+  const loadHomeView = useCallback(async () => {
+    const [summary, preview] = await Promise.all([getHomeSummary(), getAppPreview()])
+    const accessibilityType = sessionAccessibilityType || summary.user?.accessibilityType || 'VISUAL'
+    const accessibilitySettings = await getAccessibilitySettings({
+      accessibilityType,
+      identity: sessionEmail,
+    })
+
+    return {
+      summary,
+      preview: {
+        ...preview,
+        accessibility: createAccessibilityView(
+          preview.accessibility,
+          accessibilitySettings,
+          accessibilityType,
+        ),
+      },
+    }
+  }, [sessionAccessibilityType, sessionEmail])
+
   useEffect(() => {
     let isMounted = true
-
     async function loadHome() {
       try {
-        const [summary, preview] = await Promise.all([getHomeSummary(), getAppPreview()])
-        const accessibilityType = sessionAccessibilityType || summary.user?.accessibilityType || 'VISUAL'
-        const accessibilitySettings = await getAccessibilitySettings({
-          accessibilityType,
-          identity: sessionEmail,
-        })
+        const nextHomeView = await loadHomeView()
 
         if (isMounted) {
           setHomeState({
             loading: false,
             error: '',
-            summary,
-            preview: {
-              ...preview,
-              accessibility: createAccessibilityView(
-                preview.accessibility,
-                accessibilitySettings,
-                accessibilityType,
-              ),
-            },
+            ...nextHomeView,
           })
         }
       } catch {
@@ -117,7 +128,7 @@ export function HomeScreen({ session, onLogout }) {
     return () => {
       isMounted = false
     }
-  }, [sessionAccessibilityType, sessionEmail])
+  }, [loadHomeView])
 
   useEffect(() => {
     let isMounted = true
@@ -212,12 +223,30 @@ export function HomeScreen({ session, onLogout }) {
     try {
       const request = await createEmergencyRequest()
       setEmergencyMessage(request.statusMessage || '보호자에게 긴급 요청을 보냈습니다.')
-      const [summary, preview] = await Promise.all([getHomeSummary(), getAppPreview()])
-      setHomeState({ loading: false, error: '', summary, preview })
+      const nextHomeView = await loadHomeView()
+      setHomeState({ loading: false, error: '', ...nextHomeView })
     } catch (error) {
       setEmergencyMessage(error.message || '긴급 요청을 보내지 못했습니다.')
     } finally {
       setEmergencySubmitting(false)
+    }
+  }
+
+  async function handleHomeRefresh() {
+    if (homeRefreshState.refreshing) {
+      return
+    }
+
+    setHomeRefreshState({ refreshing: true, error: '' })
+    try {
+      const nextHomeView = await loadHomeView()
+      setHomeState({ loading: false, error: '', ...nextHomeView })
+      setHomeRefreshState({ refreshing: false, error: '' })
+    } catch (error) {
+      setHomeRefreshState({
+        refreshing: false,
+        error: error.message || '홈 정보를 새로고침하지 못했습니다.',
+      })
     }
   }
 
@@ -362,10 +391,13 @@ export function HomeScreen({ session, onLogout }) {
             emergencyMessage={emergencyMessage}
             emergencySubmitting={emergencySubmitting}
             alerts={preview.alerts}
+            refreshError={homeRefreshState.error}
+            refreshing={homeRefreshState.refreshing}
             statusDisplay={statusDisplay}
             summary={summary}
             onEmergencyRequest={handleEmergencyRequest}
             onOpenAlerts={() => handleTabChange('alerts')}
+            onRefreshHome={handleHomeRefresh}
           />
         ) : null}
         {activeTab === 'alerts' ? (
@@ -944,58 +976,50 @@ async function getPreferredCameraConstraints() {
     (device) => device.deviceId !== rearCamera?.deviceId && device.deviceId !== frontCamera?.deviceId,
   )
 
-  const candidates = [
-    {
-      video: {
-        facingMode: { exact: 'environment' },
-        width: { ideal: 1920 },
-        height: { ideal: 1080 },
-      },
-    },
-    {
-      video: {
-        facingMode: { ideal: 'environment' },
-        width: { ideal: 1920 },
-        height: { ideal: 1080 },
-      },
-    },
-  ]
+  if (shouldPreferRearCamera()) {
+    const candidates = []
 
-  if (rearCamera?.deviceId) {
-    candidates.unshift({
-      video: {
-        deviceId: {
-          exact: rearCamera.deviceId,
-        },
-        width: { ideal: 1920 },
-        height: { ideal: 1080 },
-      },
-    })
+    if (rearCamera?.deviceId) {
+      candidates.push(createDeviceCameraConstraint(rearCamera.deviceId))
+    }
+
+    candidates.push(createEnvironmentCameraConstraint('exact'))
+    candidates.push(createEnvironmentCameraConstraint('ideal'))
+
+    if (fallbackPhysicalCamera?.deviceId) {
+      candidates.push(createDeviceCameraConstraint(fallbackPhysicalCamera.deviceId))
+    }
+
+    if (frontCamera?.deviceId) {
+      candidates.push(createDeviceCameraConstraint(frontCamera.deviceId))
+    }
+
+    candidates.push(createGenericCameraConstraint())
+    candidates.push({ video: true })
+
+    return dedupeCameraConstraints(candidates)
   }
 
-  if (fallbackPhysicalCamera?.deviceId) {
-    candidates.push({
-      video: {
-        deviceId: {
-          exact: fallbackPhysicalCamera.deviceId,
-        },
-      },
-    })
+  const desktopPrimaryCamera =
+    frontCamera || fallbackPhysicalCamera || rearCamera || physicalCameras[0] || null
+  const desktopFallbackCameras = physicalCameras.filter(
+    (device) => device.deviceId && device.deviceId !== desktopPrimaryCamera?.deviceId,
+  )
+  const candidates = []
+
+  if (desktopPrimaryCamera?.deviceId) {
+    candidates.push(createDeviceCameraConstraint(desktopPrimaryCamera.deviceId))
   }
 
-  if (frontCamera?.deviceId) {
-    candidates.push({
-      video: {
-        deviceId: {
-          exact: frontCamera.deviceId,
-        },
-      },
-    })
-  }
+  desktopFallbackCameras.forEach((device) => {
+    candidates.push(createDeviceCameraConstraint(device.deviceId))
+  })
 
   candidates.push({ video: true })
+  candidates.push(createGenericCameraConstraint())
+  candidates.push(createEnvironmentCameraConstraint('ideal'))
 
-  return candidates
+  return dedupeCameraConstraints(candidates)
 }
 
 async function listVideoInputDevices() {
@@ -1047,7 +1071,79 @@ function waitForVisibleVideoFrame(video) {
 
 function cameraFrameTimeoutMs() {
   const override = Number(window.__ABLE_BAND_CAMERA_FRAME_TIMEOUT_MS__ || import.meta.env.VITE_CAMERA_FRAME_TIMEOUT_MS)
-  return Number.isFinite(override) && override > 0 ? override : 1200
+  if (Number.isFinite(override) && override > 0) {
+    return override
+  }
+
+  return shouldPreferRearCamera() ? 1200 : 2200
+}
+
+function shouldPreferRearCamera() {
+  if (navigator.userAgentData?.mobile) {
+    return true
+  }
+
+  if (/android|iphone|ipad|ipod|mobile/i.test(navigator.userAgent || '')) {
+    return true
+  }
+
+  if (typeof window.matchMedia === 'function') {
+    if (window.matchMedia('(pointer: coarse)').matches && window.matchMedia('(max-width: 900px)').matches) {
+      return true
+    }
+  }
+
+  if (typeof navigator.maxTouchPoints === 'number' && navigator.maxTouchPoints > 1) {
+    const narrowScreen = Math.min(window.screen?.width || 0, window.screen?.height || 0)
+    return narrowScreen > 0 && narrowScreen <= 900
+  }
+
+  return false
+}
+
+function createDeviceCameraConstraint(deviceId) {
+  return {
+    video: {
+      deviceId: {
+        exact: deviceId,
+      },
+      width: { ideal: 1920 },
+      height: { ideal: 1080 },
+    },
+  }
+}
+
+function createEnvironmentCameraConstraint(mode) {
+  return {
+    video: {
+      facingMode: { [mode]: 'environment' },
+      width: { ideal: 1920 },
+      height: { ideal: 1080 },
+    },
+  }
+}
+
+function createGenericCameraConstraint() {
+  return {
+    video: {
+      width: { ideal: 1920 },
+      height: { ideal: 1080 },
+    },
+  }
+}
+
+function dedupeCameraConstraints(candidates) {
+  const seen = new Set()
+
+  return candidates.filter((constraint) => {
+    const key = JSON.stringify(constraint)
+    if (seen.has(key)) {
+      return false
+    }
+
+    seen.add(key)
+    return true
+  })
 }
 
 function stopMediaStream(stream) {
