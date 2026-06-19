@@ -54,6 +54,7 @@ const tabTitles = {
 }
 
 const MAX_DEVICE_COUNT = 6
+const HOME_ALERT_SYNC_INTERVAL_MS = 3000
 
 const connectionStatusLabels = {
   CONNECTED: '연결됨',
@@ -143,6 +144,34 @@ export function HomeScreen({ session, onLogout }) {
       isMounted = false
     }
   }, [loadHomeView])
+
+  useEffect(() => {
+    if (homeState.loading) {
+      return undefined
+    }
+
+    let isMounted = true
+
+    const intervalId = window.setInterval(async () => {
+      if (document.visibilityState === 'hidden' || homeRefreshState.refreshing) {
+        return
+      }
+
+      try {
+        const nextHomeView = await loadHomeView()
+        if (isMounted) {
+          setHomeState({ loading: false, error: '', ...nextHomeView })
+        }
+      } catch {
+        // Keep the current view stable and retry on the next sync tick.
+      }
+    }, HOME_ALERT_SYNC_INTERVAL_MS)
+
+    return () => {
+      isMounted = false
+      window.clearInterval(intervalId)
+    }
+  }, [homeRefreshState.refreshing, homeState.loading, loadHomeView])
 
   useEffect(() => {
     startChatbotWakeService()
