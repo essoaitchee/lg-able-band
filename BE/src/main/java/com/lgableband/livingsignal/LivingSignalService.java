@@ -32,6 +32,8 @@ import org.springframework.stereotype.Service;
 @Service
 public class LivingSignalService {
 
+	private static final ZoneOffset SERVICE_OFFSET = ZoneOffset.ofHours(9);
+
 	private static final List<String> DEFAULT_WORKFLOW = List.of(
 		"사용자가 마이크로 알림음을 녹음하고 이름과 유형을 등록합니다.",
 		"등록된 샘플은 embedding으로 변환되어 같은 소리와 비교됩니다.",
@@ -209,7 +211,7 @@ public class LivingSignalService {
 	public AlertService.AlertView createDetectionAlert(String authorization, DetectionAlertRequest request) {
 		JdbcTemplate jdbcTemplate = jdbcTemplate();
 		MvpDataService.CurrentUser user = this.dataService.currentUser(authorization);
-		OffsetDateTime detectedAt = request.detectedAt() == null ? OffsetDateTime.now() : request.detectedAt();
+		OffsetDateTime detectedAt = normalizeOffsetDateTime(request.detectedAt());
 		String registeredSoundName = request.registeredSoundName().trim();
 		String soundType = request.soundType().trim();
 		AlertType alertType = alertTypeForSoundType(soundType);
@@ -221,7 +223,7 @@ public class LivingSignalService {
 		boolean requiresGuardianNotify = requiresGuardianNotify(soundType);
 
 		if (jdbcTemplate == null) {
-			this.mockDataStore.addContextAlert(
+			MockDataStore.Alert alert = this.mockDataStore.addContextAlert(
 				user.userId(),
 				alertType,
 				severity,
@@ -232,10 +234,7 @@ public class LivingSignalService {
 				voiceGuide
 			);
 
-			return this.alertService.alert(
-				authorization,
-				this.mockDataStore.alerts(user.userId(), null, null, 1).getFirst().alertId()
-			);
+			return this.alertService.alert(authorization, alert.alertId());
 		}
 
 		try {
@@ -459,7 +458,7 @@ public class LivingSignalService {
 					requiresGuardianNotify
 				)
 			);
-			ps.setTimestamp(5, Timestamp.valueOf(detectedAt.toLocalDateTime()));
+			ps.setTimestamp(5, Timestamp.valueOf(toLocalDateTime(detectedAt)));
 			return ps;
 		}, keyHolder);
 
@@ -507,7 +506,7 @@ public class LivingSignalService {
 			ps.setString(6, message);
 			ps.setString(7, voiceGuide);
 			ps.setString(8, AlertStatus.UNREAD.name());
-			ps.setTimestamp(9, Timestamp.valueOf(detectedAt.toLocalDateTime()));
+			ps.setTimestamp(9, Timestamp.valueOf(toLocalDateTime(detectedAt)));
 			return ps;
 		}, keyHolder);
 
@@ -666,11 +665,19 @@ public class LivingSignalService {
 	}
 
 	private LocalDateTime toLocalDateTime(OffsetDateTime dateTime) {
-		return dateTime == null ? LocalDateTime.now() : dateTime.toLocalDateTime();
+		return dateTime == null
+			? LocalDateTime.now(SERVICE_OFFSET)
+			: dateTime.atZoneSameInstant(SERVICE_OFFSET).toLocalDateTime();
+	}
+
+	private OffsetDateTime normalizeOffsetDateTime(OffsetDateTime dateTime) {
+		return dateTime == null
+			? OffsetDateTime.now(SERVICE_OFFSET)
+			: dateTime.withOffsetSameInstant(SERVICE_OFFSET);
 	}
 
 	private OffsetDateTime toOffsetDateTime(LocalDateTime dateTime) {
-		return dateTime == null ? null : dateTime.atOffset(ZoneOffset.ofHours(9));
+		return dateTime == null ? null : dateTime.atOffset(SERVICE_OFFSET);
 	}
 
 	private String blankToNull(String value) {

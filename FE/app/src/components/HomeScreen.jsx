@@ -102,9 +102,41 @@ export function HomeScreen({ session, onLogout }) {
     summary: null,
     preview: null,
   })
+  const locallyDeletedAlertIdsRef = useRef(new Set())
   const livingSignalSessionRef = useRef(null)
   const livingSignalCooldownRef = useRef({ key: '', at: 0 })
   const livingSignalConfigKeyRef = useRef('')
+
+  const applyLocalAlertVisibility = useCallback((nextHomeView) => {
+    if (!nextHomeView) {
+      return nextHomeView
+    }
+
+    const deletedAlertIds = locallyDeletedAlertIdsRef.current
+    if (!deletedAlertIds.size) {
+      return nextHomeView
+    }
+
+    return {
+      ...nextHomeView,
+      summary: nextHomeView.summary
+        ? {
+            ...nextHomeView.summary,
+            recentAlerts: (nextHomeView.summary.recentAlerts || []).filter(
+              (alert) => !deletedAlertIds.has(alert.alertId),
+            ),
+          }
+        : nextHomeView.summary,
+      preview: nextHomeView.preview
+        ? {
+            ...nextHomeView.preview,
+            alerts: (nextHomeView.preview.alerts || []).filter(
+              (alert) => !deletedAlertIds.has(alert.alertId),
+            ),
+          }
+        : nextHomeView.preview,
+    }
+  }, [])
 
   const loadHomeView = useCallback(async () => {
     const [summary, preview] = await Promise.all([getHomeSummary(), getAppPreview()])
@@ -152,7 +184,7 @@ export function HomeScreen({ session, onLogout }) {
           setHomeState({
             loading: false,
             error: '',
-            ...nextHomeView,
+            ...applyLocalAlertVisibility(nextHomeView),
           })
         }
       } catch {
@@ -172,7 +204,7 @@ export function HomeScreen({ session, onLogout }) {
     return () => {
       isMounted = false
     }
-  }, [loadHomeView])
+  }, [applyLocalAlertVisibility, loadHomeView])
 
   useEffect(() => {
     if (homeState.loading) {
@@ -193,7 +225,7 @@ export function HomeScreen({ session, onLogout }) {
       try {
         const nextHomeView = await loadHomeView()
         if (isMounted) {
-          setHomeState({ loading: false, error: '', ...nextHomeView })
+          setHomeState({ loading: false, error: '', ...applyLocalAlertVisibility(nextHomeView) })
         }
       } catch {
         // Keep the current view stable and retry on the next sync tick.
@@ -204,7 +236,7 @@ export function HomeScreen({ session, onLogout }) {
       isMounted = false
       window.clearInterval(intervalId)
     }
-  }, [homeRefreshState.refreshing, homeState.loading, loadHomeView, menuScreen])
+  }, [applyLocalAlertVisibility, homeRefreshState.refreshing, homeState.loading, loadHomeView, menuScreen])
 
   useEffect(() => {
     startChatbotWakeService()
@@ -461,7 +493,7 @@ export function HomeScreen({ session, onLogout }) {
       const request = await createEmergencyRequest()
       setEmergencyMessage(request.statusMessage || '보호자에게 긴급 요청을 보냈습니다.')
       const nextHomeView = await loadHomeView()
-      setHomeState({ loading: false, error: '', ...nextHomeView })
+      setHomeState({ loading: false, error: '', ...applyLocalAlertVisibility(nextHomeView) })
     } catch (error) {
       setEmergencyMessage(error.message || '긴급 요청을 보내지 못했습니다.')
     } finally {
@@ -477,7 +509,7 @@ export function HomeScreen({ session, onLogout }) {
     setHomeRefreshState({ refreshing: true, error: '' })
     try {
       const nextHomeView = await loadHomeView()
-      setHomeState({ loading: false, error: '', ...nextHomeView })
+      setHomeState({ loading: false, error: '', ...applyLocalAlertVisibility(nextHomeView) })
       setHomeRefreshState({ refreshing: false, error: '' })
     } catch (error) {
       setHomeRefreshState({
@@ -505,6 +537,7 @@ export function HomeScreen({ session, onLogout }) {
   }
 
   function handleAlertDelete(alertId) {
+    locallyDeletedAlertIdsRef.current.add(alertId)
     setHomeState((currentState) => {
       if (!currentState.summary || !currentState.preview) {
         return currentState
@@ -525,6 +558,7 @@ export function HomeScreen({ session, onLogout }) {
   }
 
   function handleAlertRestore(alertToRestore) {
+    locallyDeletedAlertIdsRef.current.delete(alertToRestore.alertId)
     setHomeState((currentState) => {
       if (!currentState.summary || !currentState.preview) {
         return currentState
