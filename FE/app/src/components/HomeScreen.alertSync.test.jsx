@@ -80,6 +80,7 @@ describe('HomeScreen alert summary sync', () => {
   })
 
   afterEach(() => {
+    vi.useRealTimers()
     vi.restoreAllMocks()
     window.localStorage.clear()
   })
@@ -229,6 +230,35 @@ describe('HomeScreen alert summary sync', () => {
     })
     expect(screen.queryByText('전기레인지 과열 주의')).toBeNull()
   })
+  it('polls the latest alerts so new living-signal alerts appear without manual refresh', async () => {
+    const user = userEvent.setup()
+    render(<HomeScreen session={session} onLogout={() => {}} />)
+
+    await screen.findByText('전기레인지 과열 주의')
+    await user.click(screen.getByRole('button', { name: '알림' }))
+
+    currentPreviewAlerts = [
+      {
+        alertId: 501,
+        type: 'LIFE',
+        severity: 'LOW',
+        title: '생활 신호 감지',
+        message: '웨어러블에서 감지된 생활 신호가 앱에도 바로 보입니다.',
+        deviceName: 'LG Able Band',
+        occurredAt: '2026-06-10T14:41:00+09:00',
+        status: 'UNREAD',
+      },
+    ]
+
+    await new Promise((resolve) => {
+      window.setTimeout(resolve, 3200)
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText('생활 신호 감지')).toBeTruthy()
+    })
+    expect(screen.queryByText('전기레인지 과열 주의')).toBeNull()
+  }, 10000)
 })
 
 async function mockFetch(input, init = {}) {

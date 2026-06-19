@@ -39,6 +39,7 @@ import './App.css'
 
 const PAIRED_PAIRING_STORAGE_KEY = 'lg-able-band.pairingSession'
 const LIVING_SIGNAL_REPORT_COOLDOWN_MS = 15000
+const LIVING_SIGNAL_SYNC_INTERVAL_MS = 5000
 const ALERT_POLL_INTERVAL_MS = 3000
 const BOTTOM_SHEET_COLLAPSED_PEEK = 34
 
@@ -65,6 +66,10 @@ function App() {
   const [isChatbotSpeaking, setIsChatbotSpeaking] = useState(false)
   const [syncedTime, setSyncedTime] = useState(() => new Date())
   const [selectedGuideTarget, setSelectedGuideTarget] = useState(null)
+  const [livingSignalConfig, setLivingSignalConfig] = useState({
+    threshold: 0.8,
+    sounds: [],
+  })
   const [, setLivingSignalState] = useState({
     isListening: false,
     threshold: 0.8,
@@ -80,6 +85,8 @@ function App() {
   const pairingCompletedRef = useRef(false)
   const livingSignalSessionRef = useRef(null)
   const livingSignalCooldownRef = useRef({ key: '', at: 0 })
+  const livingSignalConfigKeyRef = useRef('')
+  const microphonePreflightRequestedRef = useRef(false)
   const knownAlertIdsRef = useRef(new Set())
   const announcedAlertIdRef = useRef(null)
   const announcedUwbMessageRef = useRef('')
@@ -165,6 +172,12 @@ function App() {
         error: '',
         lastMatch: null,
       })
+      setLivingSignalConfig({
+        threshold: 0.8,
+        sounds: [],
+      })
+      livingSignalConfigKeyRef.current = ''
+      microphonePreflightRequestedRef.current = false
       setStatusMessage(message)
     },
     [stopLivingSignalMonitoring],
@@ -353,14 +366,102 @@ function App() {
   }, [alertStatuses, isPaired, mode, resetPairingSession])
 
   useEffect(() => {
+    if (!isPaired) {
+      return undefined
+    }
+
+    if (!isMicrophoneSupported() || microphonePreflightRequestedRef.current) {
+      return undefined
+    }
+
+    microphonePreflightRequestedRef.current = true
+    let isMounted = true
+
+    async function requestMicrophonePermission() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+        stream.getTracks().forEach((track) => track.stop())
+      } catch (error) {
+        if (!isMounted) {
+          return
+        }
+
+        setLivingSignalState((current) => ({
+          ...current,
+          error:
+            error?.message || '생활 신호 감지를 위해 마이크 권한을 허용해주세요.',
+        }))
+      }
+    }
+
+    requestMicrophonePermission()
+
+    return () => {
+      isMounted = false
+    }
+  }, [isPaired])
+
+  useEffect(() => {
+    if (!isPaired) {
+      return undefined
+    }
+
+    let isMounted = true
+
+    async function syncLivingSignalConfig() {
+      try {
+        const state = await getWearableLivingSignalState()
+        if (!isMounted) {
+          return
+        }
+
+        const nextConfig = {
+          threshold: state.threshold ?? 0.8,
+          sounds: state.sounds || [],
+        }
+        const nextConfigKey = getLivingSignalConfigKey(nextConfig)
+        livingSignalConfigKeyRef.current = nextConfigKey
+        setLivingSignalConfig((current) =>
+          getLivingSignalConfigKey(current) === nextConfigKey ? current : nextConfig,
+        )
+        setLivingSignalState((current) => ({
+          ...current,
+          threshold: nextConfig.threshold,
+          sounds: nextConfig.sounds,
+          error: '',
+        }))
+      } catch (error) {
+        if (!isMounted) {
+          return
+        }
+
+        if (isAuthExpiredError(error)) {
+          resetPairingSession('')
+          return
+        }
+
+        setLivingSignalState((current) => ({
+          ...current,
+          error: error.message || '생활 신호 설정을 불러오지 못했습니다.',
+        }))
+      }
+    }
+
+    syncLivingSignalConfig()
+    const intervalId = window.setInterval(syncLivingSignalConfig, LIVING_SIGNAL_SYNC_INTERVAL_MS)
+
+    return () => {
+      isMounted = false
+      window.clearInterval(intervalId)
+    }
+  }, [isPaired, resetPairingSession])
+
+  useEffect(() => {
     if (
       !isPaired ||
       isChatbotWakeListening ||
       isChatbotOpen ||
-      isChatbotSpeaking ||
-      mode === 'idle' ||
-      mode === 'uwb' ||
-      mode === 'emergency'
+      isChatbotSpeaking
     ) {
       stopLivingSignalMonitoring()
       return undefined
@@ -379,25 +480,19 @@ function App() {
 
     async function startMonitoring() {
       try {
-        const state = await getWearableLivingSignalState()
-        if (!isMounted) {
-          return
-        }
-
-        setLivingSignalState((current) => ({
-          ...current,
-          threshold: state.threshold ?? 0.8,
-          sounds: state.sounds || [],
-          error: '',
-        }))
-
-        if (!state.sounds?.length) {
+        if (!livingSignalConfig.sounds.length) {
+          setLivingSignalState((current) => ({
+            ...current,
+            isListening: false,
+            level: 0,
+            error: '',
+          }))
           return
         }
 
         const session = await createWearableLivingSignalSession({
-          sounds: state.sounds,
-          threshold: state.threshold ?? 0.8,
+          sounds: livingSignalConfig.sounds,
+          threshold: livingSignalConfig.threshold ?? 0.8,
           onLevel: (level) => {
             if (!isMounted) {
               return
@@ -429,18 +524,25 @@ function App() {
             }
 
             try {
-              const createdAlert = await createLivingSignalDetectionAlert({
+              const createdAlertResponse = await createLivingSignalDetectionAlert({
                 registeredSoundName: match.registeredSoundName,
                 soundType: match.soundType,
                 similarity: Number(match.similarity.toFixed(4)),
                 detectedAt: match.detectedAt,
               })
+              const createdAlert = normalizeDetectedAlert(createdAlertResponse, match)
 
               if (!isMounted) {
                 return
               }
 
               announcedAlertIdRef.current = createdAlert.alertId
+              if (createdAlert.alertId) {
+                knownAlertIdsRef.current = new Set([
+                  ...knownAlertIdsRef.current,
+                  createdAlert.alertId,
+                ])
+              }
               setLivingSignalState((current) => ({
                 ...current,
                 lastMatch: match,
@@ -490,7 +592,16 @@ function App() {
       isMounted = false
       stopLivingSignalMonitoring()
     }
-  }, [isChatbotOpen, isChatbotSpeaking, isChatbotWakeListening, isPaired, mode, speakText, stopLivingSignalMonitoring])
+  }, [
+    isChatbotOpen,
+    isChatbotSpeaking,
+    isChatbotWakeListening,
+    isPaired,
+    livingSignalConfig,
+    mode,
+    speakText,
+    stopLivingSignalMonitoring,
+  ])
 
   useEffect(() => {
     if (!selectedAlert?.alertId) {
@@ -1172,6 +1283,46 @@ function formatEmergencyErrorMessage(error) {
   }
 
   return messages[error?.code] || error?.message || messages.SERVER_ERROR
+}
+
+function getLivingSignalConfigKey(config) {
+  const sounds = (config?.sounds || []).map((sound) => ({
+    soundId: sound.soundId,
+    soundType: sound.soundType,
+    updatedAt: sound.updatedAt || '',
+    recordings: (sound.recordings || []).map((recording) => ({
+      recordingId: recording.recordingId,
+      label: recording.label,
+      createdAt: recording.createdAt || '',
+    })),
+  }))
+
+  return JSON.stringify({
+    threshold: config?.threshold ?? 0.8,
+    sounds,
+  })
+}
+
+function normalizeDetectedAlert(alert, match) {
+  return {
+    alertId: alert?.alertId || alert?.id || `living-signal-${match.soundId}-${match.detectedAt}`,
+    type: alert?.type || alert?.alertType || 'LIFE',
+    severity: alert?.severity || 'LOW',
+    title: alert?.title || `${match.registeredSoundName} 감지`,
+    message:
+      alert?.message ||
+      `${match.registeredSoundName} 생활 알림음이 감지되었습니다.`,
+    voiceGuide:
+      alert?.voiceGuide ||
+      alert?.message ||
+      `${match.registeredSoundName} 생활 알림음이 감지되었습니다.`,
+    deviceName: alert?.deviceName || 'LG Able Band',
+    locationName: alert?.locationName || '현재 위치',
+    occurredAt: alert?.occurredAt || alert?.createdAt || match.detectedAt,
+    status: alert?.status || (alert?.isRead ? 'CONFIRMED' : 'UNREAD'),
+    vibrationPattern: alert?.vibrationPattern || 'MEDIUM',
+    requiresGuardianNotify: alert?.requiresGuardianNotify ?? false,
+  }
 }
 
 function buildActiveGuideSession(bleGuide, uwbSession, selectedGuideTarget) {

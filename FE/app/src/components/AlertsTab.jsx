@@ -111,7 +111,7 @@ export function AlertsTab({
   onAlertRestore = () => {},
   onAlertStatusChange = () => {},
 }) {
-  const [alertItems, setAlertItems] = useState(alerts)
+  const [alertItems, setAlertItems] = useState(() => alerts.filter((alert) => alert.status !== 'CONFIRMED'))
   const [activeFilter, setActiveFilter] = useState('ALL')
   const [selectedAlertId, setSelectedAlertId] = useState(null)
   const [feedbackMessage, setFeedbackMessage] = useState('')
@@ -132,6 +132,13 @@ export function AlertsTab({
     [activeFilter, visibleAlertItems],
   )
 
+  useEffect(() => {
+    const nextAlerts = alerts.filter((alert) => alert.status !== 'CONFIRMED')
+    setAlertItems(nextAlerts)
+    setSelectedAlertId((current) =>
+      current !== null && !nextAlerts.some((alert) => alert.alertId === current) ? null : current,
+    )
+  }, [alerts])
 
   useEffect(() => {
     if (selectedAlertId === null && alertView !== 'stats') {
