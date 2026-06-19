@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { HomeScreen } from './HomeScreen'
 
 vi.mock('./VoiceChatbot', () => ({
+  CHATBOT_ACTIVITY_EVENT: 'lg-able-band:chatbot-activity',
   CHATBOT_INTERRUPT_EVENT: 'lg-able-band:interrupt-chatbot',
   VoiceChatbot: () => <div data-testid="voice-chatbot" />,
 }))

@@ -21,6 +21,7 @@ import {
 import { normalizeSpeechText, shouldCloseChatbot, shouldOpenChatbot } from '../utils/chatbotWake'
 
 export const CHATBOT_INTERRUPT_EVENT = 'lg-able-band:interrupt-chatbot'
+export const CHATBOT_ACTIVITY_EVENT = 'lg-able-band:chatbot-activity'
 
 const CHATBOT_VOICE_STATE = {
   CLOSED: 'CLOSED',
@@ -181,6 +182,28 @@ export function VoiceChatbot({
   useEffect(() => {
     isOpenRef.current = isOpen
   }, [embedded, isOpen])
+
+  useEffect(() => {
+    const isActive =
+      isOpen ||
+      voiceState !== CHATBOT_VOICE_STATE.CLOSED ||
+      isListening ||
+      isRequesting
+
+    window.dispatchEvent(
+      new CustomEvent(CHATBOT_ACTIVITY_EVENT, {
+        detail: { active: isActive },
+      }),
+    )
+
+    return () => {
+      window.dispatchEvent(
+        new CustomEvent(CHATBOT_ACTIVITY_EVENT, {
+          detail: { active: false },
+        }),
+      )
+    }
+  }, [isListening, isOpen, isRequesting, voiceState])
 
   useEffect(() => {
     wakeOpenChatbotRef.current = () => runChatbotButtonAction(() => openChatbot({ fromWake: true }))
