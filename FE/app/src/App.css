@@ -9014,35 +9014,46 @@ h2 {
   box-shadow: 0 10px 22px rgba(190, 18, 60, 0.18);
 }
 
-/* Demo-friendly baseline ratio with room to grow on taller phones */
-.phone-screen {
-  --app-demo-height: clamp(560px, 78dvh, 640px);
-  min-height: var(--app-demo-height);
+/* Fully responsive app viewport fit */
+.phone-screen.app-screen {
+  --app-demo-aspect-width: 375;
+  --app-demo-aspect-height: 667;
+  width: min(100vw, calc(100dvh * var(--app-demo-aspect-width) / var(--app-demo-aspect-height)));
+  height: min(100dvh, calc(100vw * var(--app-demo-aspect-height) / var(--app-demo-aspect-width)));
+  min-height: min(100dvh, calc(100vw * var(--app-demo-aspect-height) / var(--app-demo-aspect-width)));
+  max-width: 100vw;
+  max-height: 100dvh;
+  aspect-ratio: var(--app-demo-aspect-width) / var(--app-demo-aspect-height);
 }
 
 .app-screen {
-  height: min(100dvh, var(--app-demo-height));
-  max-height: var(--app-demo-height);
+  height: 100%;
+  max-height: none;
+  min-height: 0;
 }
 
 .phone-screen.login-screen,
 .phone-screen.signup-screen,
 .phone-screen.placeholder-screen {
-  min-height: clamp(620px, 82dvh, 700px);
+  min-height: 100dvh;
 }
 
 .phone-screen.login-screen .login-brand-logo {
   width: min(76%, 216px);
 }
 
-@media (min-height: 780px) {
-  .phone-screen {
-    --app-demo-height: clamp(580px, 82dvh, 680px);
+@media (max-aspect-ratio: 375/667) {
+  .phone-screen.app-screen {
+    width: 100vw;
+    height: 100dvh;
+    min-height: 100dvh;
   }
 }
 
-@media (min-height: 860px) {
-  .phone-screen {
-    --app-demo-height: clamp(600px, 84dvh, 720px);
+@media (min-aspect-ratio: 375/667) {
+  .phone-screen.app-screen {
+    width: auto;
+    height: 100dvh;
+    min-height: 100dvh;
   }
 }
