@@ -5,7 +5,7 @@ import { CHATBOT_QUESTION_CATEGORIES, FALLBACK_CHAT_ALERTS } from '../data/chatb
 import { createDevice, getDevices } from '../services/deviceService'
 import { createEmergencyRequest } from '../services/emergencyService'
 import { linkGuardianByEmail } from '../services/guardianService'
-import { CHATBOT_WAKE_EVENT, stopChatbotWakeService } from '../services/chatbotWakeService'
+import { CHATBOT_WAKE_EVENT, startChatbotWakeService, stopChatbotWakeService } from '../services/chatbotWakeService'
 import {
   playGreetingAudio,
   playTurnCueTone,
@@ -20,6 +20,7 @@ export { shouldOpenChatbot } from '../utils/chatbotWake'
 
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
 export const CHATBOT_INTERRUPT_EVENT = 'lg-able-band:interrupt-chatbot'
+export const CHATBOT_ACTIVITY_EVENT = 'lg-able-band:chatbot-activity'
 
 const CHATBOT_VOICE_STATE = {
   CLOSED: 'CLOSED',
@@ -180,6 +181,28 @@ export function VoiceChatbot({
   useEffect(() => {
     isOpenRef.current = isOpen
   }, [embedded, isOpen])
+
+  useEffect(() => {
+    const isActive =
+      isOpen ||
+      voiceState !== CHATBOT_VOICE_STATE.CLOSED ||
+      isListening ||
+      isRequesting
+
+    window.dispatchEvent(
+      new CustomEvent(CHATBOT_ACTIVITY_EVENT, {
+        detail: { active: isActive },
+      }),
+    )
+
+    return () => {
+      window.dispatchEvent(
+        new CustomEvent(CHATBOT_ACTIVITY_EVENT, {
+          detail: { active: false },
+        }),
+      )
+    }
+  }, [isListening, isOpen, isRequesting, voiceState])
 
   useEffect(() => {
     wakeOpenChatbotRef.current = () => runChatbotButtonAction(() => openChatbot({ fromWake: true }))
@@ -385,6 +408,7 @@ export function VoiceChatbot({
       onClose?.()
     } else {
       setIsOpen(false)
+      startChatbotWakeService()
     }
   }
 
@@ -1328,7 +1352,7 @@ export function VoiceChatbot({
     pauseRecognitionForAssistantSpeech()
     setChatbotVoiceState(CHATBOT_VOICE_STATE.SPEAKING)
     const greetingVersion = audioStopVersionRef.current
-    playGreetingAudio().then((played) => {
+    playGreetingAudio().finally(() => {
       if (
         greetingVersion !== audioStopVersionRef.current
         || !conversationActiveRef.current
@@ -1337,12 +1361,7 @@ export function VoiceChatbot({
         return
       }
 
-      if (played) {
-        cueUserTurnAndListen()
-        return
-      }
-
-      speakAndCueUserTurn('무엇을 도와드릴까요')
+      speakAndCueUserTurn('무엇을 도와드릴까요?')
     })
   }
 
