@@ -9024,3 +9024,47 @@ h2 {
   color: #ffffff;
   box-shadow: 0 10px 22px rgba(190, 18, 60, 0.18);
 }
+
+/* Fully responsive app viewport fit */
+.phone-screen.app-screen {
+  --app-demo-aspect-width: 375;
+  --app-demo-aspect-height: 667;
+  width: min(100vw, calc(100dvh * var(--app-demo-aspect-width) / var(--app-demo-aspect-height)));
+  height: min(100dvh, calc(100vw * var(--app-demo-aspect-height) / var(--app-demo-aspect-width)));
+  min-height: min(100dvh, calc(100vw * var(--app-demo-aspect-height) / var(--app-demo-aspect-width)));
+  max-width: 100vw;
+  max-height: 100dvh;
+  aspect-ratio: var(--app-demo-aspect-width) / var(--app-demo-aspect-height);
+}
+
+.app-screen {
+  height: 100%;
+  max-height: none;
+  min-height: 0;
+}
+
+.phone-screen.login-screen,
+.phone-screen.signup-screen,
+.phone-screen.placeholder-screen {
+  min-height: 100dvh;
+}
+
+.phone-screen.login-screen .login-brand-logo {
+  width: min(76%, 216px);
+}
+
+@media (max-aspect-ratio: 375/667) {
+  .phone-screen.app-screen {
+    width: 100vw;
+    height: 100dvh;
+    min-height: 100dvh;
+  }
+}
+
+@media (min-aspect-ratio: 375/667) {
+  .phone-screen.app-screen {
+    width: auto;
+    height: 100dvh;
+    min-height: 100dvh;
+  }
+}
