@@ -11,6 +11,7 @@ import { startChatbotWakeService, stopChatbotWakeService } from '../services/cha
 import { applyContextAiSafetyStatus, getAppPreview, getHomeSummary } from '../services/homeService'
 import { getDevices } from '../services/deviceService'
 import { createEmergencyRequest } from '../services/emergencyService'
+import { isAlertFeedbackCandidate, runAlertsFeedback } from '../services/notificationFeedbackService'
 import {
   createGuardian,
   deleteGuardian,
@@ -105,6 +106,7 @@ export function HomeScreen({ session, onLogout }) {
   const livingSignalSessionRef = useRef(null)
   const livingSignalCooldownRef = useRef({ key: '', at: 0 })
   const livingSignalConfigKeyRef = useRef('')
+  const announcedAlertIdsRef = useRef(new Set())
 
   const loadHomeView = useCallback(async () => {
     const [summary, preview] = await Promise.all([getHomeSummary(), getAppPreview()])
@@ -224,6 +226,27 @@ export function HomeScreen({ session, onLogout }) {
       window.removeEventListener(CHATBOT_ACTIVITY_EVENT, handleChatbotActivity)
     }
   }, [])
+
+  useEffect(() => {
+    if (homeState.loading || isChatbotActive) {
+      return
+    }
+
+    const accessibilitySettings = homeState.preview?.accessibility
+    const nextAlerts = (homeState.preview?.alerts || [])
+      .filter(isAlertFeedbackCandidate)
+      .filter((alert) => !announcedAlertIdsRef.current.has(alert.alertId))
+
+    if (nextAlerts.length === 0) {
+      return
+    }
+
+    announcedAlertIdsRef.current = new Set([
+      ...announcedAlertIdsRef.current,
+      ...nextAlerts.map((alert) => alert.alertId),
+    ])
+    runAlertsFeedback(nextAlerts, accessibilitySettings)
+  }, [homeState.loading, homeState.preview?.accessibility, homeState.preview?.alerts, isChatbotActive])
 
   useEffect(() => {
     if (homeState.loading) {
@@ -711,6 +734,7 @@ export function HomeScreen({ session, onLogout }) {
         ) : null}
         {activeTab === 'alerts' ? (
           <AlertsTab
+            accessibility={preview.accessibility}
             accessibilityType={session.userProfile?.accessibilityType || 'VISUAL'}
             alerts={preview.alerts}
             alertView={alertsScreen}
