@@ -36,10 +36,11 @@ describe('wearable VoiceChatbot button selection', () => {
 
     await user.click(container.querySelector('.wearable-ai-category-card'))
     expect(screen.getByRole('heading', { name: '복지 정보' })).toBeTruthy()
-    expect(container.querySelectorAll('.wearable-ai-question-button')).toHaveLength(4)
+    expect(container.querySelectorAll('.wearable-ai-question-button')).toHaveLength(5)
     expect(screen.getByRole('button', { name: '복지 정보 질문: 의료비 지원' })).toBeTruthy()
     expect(screen.getByRole('button', { name: '복지 정보 질문: 교통비 지원' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: '복지 정보 질문: 보청기 지원' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '복지 정보 질문: 보조기기 지원' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '복지 정보 질문: 활동지원 서비스' })).toBeTruthy()
     expect(screen.getByRole('button', { name: '복지 정보 질문: 직접 질문하기' })).toBeTruthy()
 
     await user.click(container.querySelector('.wearable-ai-question-button'))
@@ -49,7 +50,20 @@ describe('wearable VoiceChatbot button selection', () => {
       expect(screen.queryByText('답변을 준비하고 있어요.')).toBeNull()
     })
     expect(screen.getByRole('heading', { name: 'AI 답변' })).toBeTruthy()
+    expect(screen.queryByLabelText('중요도 NORMAL')).toBeNull()
+    expect(screen.queryByText(/출처:/)).toBeNull()
+    const welfareCardActions = container.querySelector('.wearable-welfare-card-actions')
+    expect(welfareCardActions?.querySelectorAll('button')).toHaveLength(4)
+    expect(welfareCardActions?.textContent).toContain('신청 방법')
+    expect(welfareCardActions?.textContent).toContain('문의처')
+    expect(welfareCardActions?.textContent).toContain('지원 대상')
+    expect(welfareCardActions?.textContent).toContain('앱에서 자세히')
     expect(screen.getByText('더 궁금한 것이 있나요?')).toBeTruthy()
+    const welfareFollowups = container.querySelector('.wearable-ai-followups')
+    expect(welfareFollowups?.querySelectorAll('button')).toHaveLength(2)
+    expect(welfareFollowups?.textContent).not.toContain('신청 방법')
+    expect(welfareFollowups?.textContent).not.toContain('지원 대상')
+    expect(welfareFollowups?.textContent).not.toContain('문의처')
     expect(screen.getByRole('button', { name: '다른 질문 보기' })).toBeTruthy()
   })
 
@@ -69,14 +83,151 @@ describe('wearable VoiceChatbot button selection', () => {
 
     expect(screen.getByRole('heading', { name: '생활/안전' })).toBeTruthy()
     expect(container.querySelectorAll('.wearable-ai-question-button')).toHaveLength(4)
-    expect(screen.getByRole('button', { name: '생활/안전 질문: 최근 위험 알림 확인' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: '생활/안전 질문: 오늘 생활 알림 확인' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: '생활/안전 질문: 문 열림 상태 확인' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '생활/안전 질문: 최근 알림 확인' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '생활/안전 질문: 위험 알림 확인' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '생활/안전 질문: 읽지 않은 알림 확인' })).toBeTruthy()
 
     await user.click(screen.getByRole('button', { name: '생활/안전 질문: 직접 질문하기' }))
 
     expect(container.querySelectorAll('.wearable-ai-category-card')).toHaveLength(0)
     expect(screen.queryByRole('heading', { name: 'AI 답변' })).toBeNull()
+  })
+
+  it('renders safety answers as a compact alert card without welfare details', async () => {
+    const alerts = [
+      { alertId: 1, title: '냉장고 문 열림 알림', message: '문이 열려 있어요.', type: 'LIFE', status: 'UNREAD' },
+      { alertId: 2, title: '세탁 완료 알림', message: '세탁이 끝났어요.', type: 'LIFE', status: 'UNREAD' },
+      { alertId: 3, title: '공기질 주의 알림', message: '환기가 필요해요.', type: 'DANGER', status: 'UNREAD' },
+    ]
+    window.localStorage.setItem('lg-able-band.wearableAccessToken', 'wearable-test-token')
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+      if (String(url) === '/api/alerts?limit=20') {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'Content-Type': 'application/json' }),
+          json: async () => ({ items: alerts }),
+        }
+      }
+
+      return {
+        ok: false,
+        status: 401,
+        headers: new Headers({ 'Content-Type': 'application/json' }),
+        json: async () => ({ code: 'UNAUTHORIZED' }),
+      }
+    })
+    const user = userEvent.setup()
+    const { container } = render(
+      <VoiceChatbot
+        embedded
+        isPaired
+        mode="idle"
+        notificationSettings={{ voiceGuide: false, vibrationGuide: false }}
+      />,
+    )
+
+    await user.click(screen.getByRole('button', { name: 'AI에게 묻기' }))
+    await user.click(screen.getByRole('button', { name: '생활/안전' }))
+    await user.click(screen.getByRole('button', { name: '생활/안전 질문: 최근 알림 확인' }))
+
+    await waitFor(() => {
+      expect(container.querySelector('.wearable-safety-alert-card')).toBeTruthy()
+    })
+
+    expect(screen.getByRole('heading', { name: '최근 알림 확인' })).toBeTruthy()
+    expect(screen.getByText(/전체 알림은 3건입니다/)).toBeTruthy()
+    expect(fetchMock).toHaveBeenCalledWith('/api/alerts?limit=20', expect.any(Object))
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(screen.queryByLabelText('중요도 HIGH')).toBeNull()
+    expect(screen.queryByText('해야 할 일')).toBeNull()
+    expect(screen.queryByText(/출처:/)).toBeNull()
+    expect(screen.queryByRole('button', { name: '신청 방법' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '문의처' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '지원 대상' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '앱에서 자세히' })).toBeNull()
+    expect(screen.getByRole('button', { name: '닫기' })).toBeTruthy()
+    window.localStorage.removeItem('lg-able-band.wearableAccessToken')
+  })
+
+  it('renders guardian requests as compact result cards and sends the mapped queries', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      headers: new Headers({ 'Content-Type': 'application/json' }),
+      json: async () => ({ answerText: '요청 처리 완료' }),
+    })
+    const user = userEvent.setup()
+    const { container } = render(
+      <VoiceChatbot
+        embedded
+        isPaired
+        mode="idle"
+        notificationSettings={{ voiceGuide: false, vibrationGuide: false }}
+      />,
+    )
+
+    await user.click(screen.getByRole('button', { name: 'AI에게 묻기' }))
+    await user.click(screen.getByRole('button', { name: '보호자 연결' }))
+
+    expect(screen.getByRole('heading', { name: '보호자 연결' })).toBeTruthy()
+    expect(screen.getByText('추천 질문을 선택하세요')).toBeTruthy()
+    expect(container.querySelectorAll('.wearable-ai-question-button')).toHaveLength(4)
+    expect(screen.getByRole('button', { name: '보호자 연결 질문: 보호자에게 연결 요청' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '보호자 연결 질문: 긴급 도움 요청' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '보호자 연결 질문: 최근 보호자 알림 확인' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '보호자 연결 질문: 직접 질문하기' })).toBeTruthy()
+
+    await user.click(screen.getByRole('button', { name: '보호자 연결 질문: 보호자에게 연결 요청' }))
+    await waitFor(() => expect(screen.getByText('보호자에게 연결 요청을 보냈어요.')).toBeTruthy())
+    expect(screen.getByText('곧 확인할 수 있도록 알림을 전달했어요.')).toBeTruthy()
+    expect(fetchMock.mock.calls.some(([, options]) => JSON.parse(options.body).text === '보호자에게 연결 요청해줘')).toBe(true)
+    expect(container.querySelector('.wearable-guardian-request-card')).toBeTruthy()
+    expect(screen.queryByText('해야 할 일')).toBeNull()
+    expect(screen.queryByText(/출처:/)).toBeNull()
+    expect(screen.queryByRole('button', { name: '신청 방법' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '앱에서 자세히' })).toBeNull()
+
+    await user.click(screen.getByRole('button', { name: '닫기' }))
+    await user.click(screen.getByRole('button', { name: '보호자 연결 질문: 긴급 도움 요청' }))
+    await waitFor(() => expect(screen.getByText('긴급 도움 요청을 보냈어요.')).toBeTruthy())
+    expect(screen.getByText('보호자에게 즉시 알림을 전달했어요.')).toBeTruthy()
+    expect(fetchMock.mock.calls.some(([, options]) => JSON.parse(options.body).text === '긴급 도움 요청해줘')).toBe(true)
+
+    await user.click(screen.getByRole('button', { name: '닫기' }))
+    await user.click(screen.getByRole('button', { name: '보호자 연결 질문: 최근 보호자 알림 확인' }))
+    await waitFor(() => expect(screen.getByText('최근 보호자 알림을 확인했어요.')).toBeTruthy())
+    expect(fetchMock.mock.calls.some(([, options]) => JSON.parse(options.body).text === '최근 보호자 알림 확인해줘')).toBe(true)
+  })
+
+  it('passes the unread-alert recommendation to the app chatbot unread filter', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'Content-Type': 'application/json' }),
+      json: async () => ({
+        items: [
+          { alertId: 1, title: '확인한 알림', message: '확인 완료', type: 'LIFE', status: 'CONFIRMED' },
+          { alertId: 2, title: '읽지 않은 알림 1', message: '확인이 필요해요.', type: 'LIFE', status: 'UNREAD' },
+          { alertId: 3, title: '읽지 않은 알림 2', message: '확인이 필요해요.', type: 'DANGER', status: 'UNREAD' },
+        ],
+      }),
+    })
+    const user = userEvent.setup()
+    render(
+      <VoiceChatbot
+        embedded
+        isPaired
+        mode="idle"
+        notificationSettings={{ voiceGuide: false, vibrationGuide: false }}
+      />,
+    )
+
+    await user.click(screen.getByRole('button', { name: 'AI에게 묻기' }))
+    await user.click(screen.getByRole('button', { name: '생활/안전' }))
+    await user.click(screen.getByRole('button', { name: '생활/안전 질문: 읽지 않은 알림 확인' }))
+
+    expect(await screen.findByText(/미확인 알림은 2건입니다/)).toBeTruthy()
+    expect(screen.queryByText(/확인한 알림/)).toBeNull()
   })
 
   it('renders appliance status answers as wearable cards', async () => {
