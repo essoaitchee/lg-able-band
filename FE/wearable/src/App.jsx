@@ -15,7 +15,6 @@ import {
   createLivingSignalDetectionAlert,
   getWearableLivingSignalState,
 } from './services/livingSignalService'
-import { getWearableNotificationSettings } from './services/accessibilityPreferenceService'
 import { clearWearableAccessToken, getWearableAccessToken } from './services/wearableApiClient'
 import {
   confirmAlert,
@@ -40,28 +39,16 @@ import './App.css'
 
 const PAIRED_PAIRING_STORAGE_KEY = 'lg-able-band.pairingSession'
 const LIVING_SIGNAL_REPORT_COOLDOWN_MS = 15000
-const LIVING_SIGNAL_SYNC_INTERVAL_MS = 5000
 const ALERT_POLL_INTERVAL_MS = 3000
-const NOTIFICATION_SETTINGS_SYNC_INTERVAL_MS = 5000
 const BOTTOM_SHEET_COLLAPSED_PEEK = 34
-
-const DEFAULT_NOTIFICATION_SETTINGS = {
-  voiceGuide: true,
-  vibrationGuide: true,
-}
-const PENDING_NOTIFICATION_SETTINGS = {
-  voiceGuide: false,
-  vibrationGuide: false,
-}
 
 function App() {
   const initialPairing = getStoredPairedPairingSession()
-  const [isPaired, setIsPaired] = useState(Boolean(initialPairing))
+  const [isPaired, setIsPaired] = useState(false)
   const [mode, setMode] = useState('alert')
-  const [pairingStatus, setPairingStatus] = useState(() =>
-    initialPairing ? 'success' : getInitialPairingStatus(),
-  )
-  const [pairing, setPairing] = useState(initialPairing)
+  const [pairingStatus, setPairingStatus] = useState(getInitialPairingStatus())
+  const [pairing, setPairing] = useState(null)
+  const [isRestoringPairing, setIsRestoringPairing] = useState(Boolean(initialPairing))
   const [pairingGeneration, setPairingGeneration] = useState(0)
   const [alertQueue, setAlertQueue] = useState([])
   const [alertIndex, setAlertIndex] = useState(0)
@@ -77,14 +64,6 @@ function App() {
   const [isChatbotSpeaking, setIsChatbotSpeaking] = useState(false)
   const [syncedTime, setSyncedTime] = useState(() => new Date())
   const [selectedGuideTarget, setSelectedGuideTarget] = useState(null)
-  const [livingSignalConfig, setLivingSignalConfig] = useState({
-    threshold: 0.8,
-    sounds: [],
-  })
-  const [notificationSettings, setNotificationSettings] = useState(() =>
-    initialPairing ? PENDING_NOTIFICATION_SETTINGS : DEFAULT_NOTIFICATION_SETTINGS,
-  )
-  const [notificationSettingsReady, setNotificationSettingsReady] = useState(!initialPairing)
   const [, setLivingSignalState] = useState({
     isListening: false,
     threshold: 0.8,
@@ -100,11 +79,14 @@ function App() {
   const pairingCompletedRef = useRef(false)
   const livingSignalSessionRef = useRef(null)
   const livingSignalCooldownRef = useRef({ key: '', at: 0 })
-  const livingSignalConfigKeyRef = useRef('')
-  const microphonePreflightRequestedRef = useRef(false)
   const knownAlertIdsRef = useRef(new Set())
   const announcedAlertIdRef = useRef(null)
   const announcedUwbMessageRef = useRef('')
+  const uwbSpeechStateRef = useRef({
+    utterance: null,
+    currentText: '',
+    pendingText: '',
+  })
   const uwbVibrationIntervalRef = useRef(null)
   const bleGuide = useBleProximityGuide()
 
@@ -126,8 +108,6 @@ function App() {
   const speakText = useCallback((text) => {
     if (
       !text ||
-      !notificationSettingsReady ||
-      !notificationSettings.voiceGuide ||
       isChatbotOpen ||
       isChatbotSpeaking ||
       typeof window === 'undefined' ||
@@ -141,15 +121,65 @@ function App() {
     const utterance = new SpeechSynthesisUtterance(text)
     utterance.lang = 'ko-KR'
     window.speechSynthesis.speak(utterance)
-  }, [isChatbotOpen, isChatbotSpeaking, notificationSettings.voiceGuide, notificationSettingsReady])
+  }, [isChatbotOpen, isChatbotSpeaking])
 
-  const notifyVibration = useCallback((pattern) => {
-    if (!notificationSettingsReady || !notificationSettings.vibrationGuide) {
-      return false
+  const speakUwbGuide = useCallback((text) => {
+    const trimmedText = String(text || '').trim()
+    if (
+      !trimmedText ||
+      isChatbotOpen ||
+      isChatbotSpeaking ||
+      typeof window === 'undefined' ||
+      window.__ABLE_BAND_CHATBOT_AUDIO_LOCK__ === true ||
+      !('speechSynthesis' in window) ||
+      typeof window.SpeechSynthesisUtterance !== 'function'
+    ) {
+      return
     }
 
-    return triggerVibration(pattern)
-  }, [notificationSettings.vibrationGuide, notificationSettingsReady])
+    const synthesis = window.speechSynthesis
+    const speechState = uwbSpeechStateRef.current
+
+    if (speechState.utterance && synthesis.speaking) {
+      speechState.pendingText = trimmedText
+      return
+    }
+
+    if (!speechState.utterance && synthesis.speaking) {
+      synthesis.cancel()
+    }
+
+    if (speechState.currentText === trimmedText && !speechState.pendingText) {
+      return
+    }
+
+    const utterance = new SpeechSynthesisUtterance(trimmedText)
+    utterance.lang = 'ko-KR'
+    speechState.currentText = trimmedText
+    speechState.pendingText = ''
+    speechState.utterance = utterance
+
+    const flushPendingText = () => {
+      if (uwbSpeechStateRef.current.utterance !== utterance) {
+        return
+      }
+
+      uwbSpeechStateRef.current.utterance = null
+      const nextText = uwbSpeechStateRef.current.pendingText
+      uwbSpeechStateRef.current.pendingText = ''
+
+      if (nextText && nextText !== trimmedText) {
+        uwbSpeechStateRef.current.currentText = ''
+        window.setTimeout(() => {
+          speakUwbGuide(nextText)
+        }, 60)
+      }
+    }
+
+    utterance.onend = flushPendingText
+    utterance.onerror = flushPendingText
+    synthesis.speak(utterance)
+  }, [isChatbotOpen, isChatbotSpeaking])
 
   const stopLivingSignalMonitoring = useCallback(async () => {
     const session = livingSignalSessionRef.current
@@ -197,14 +227,6 @@ function App() {
         error: '',
         lastMatch: null,
       })
-      setLivingSignalConfig({
-        threshold: 0.8,
-        sounds: [],
-      })
-      setNotificationSettings(PENDING_NOTIFICATION_SETTINGS)
-      setNotificationSettingsReady(false)
-      livingSignalConfigKeyRef.current = ''
-      microphonePreflightRequestedRef.current = false
       setStatusMessage(message)
     },
     [stopLivingSignalMonitoring],
@@ -220,8 +242,6 @@ function App() {
     storePairedPairingSession(pairedSession)
     setPairing((current) => mergePairingSession(current, pairedSession))
     setPairingStatus('success')
-    setNotificationSettings(PENDING_NOTIFICATION_SETTINGS)
-    setNotificationSettingsReady(false)
     window.clearTimeout(pairingPollTimerRef.current)
     window.clearTimeout(pairingCompleteTimerRef.current)
     pairingCompleteTimerRef.current = window.setTimeout(() => {
@@ -239,6 +259,58 @@ function App() {
   }, [])
 
   useEffect(() => {
+    if (!initialPairing) {
+      setIsRestoringPairing(false)
+      return undefined
+    }
+
+    let isMounted = true
+
+    async function restorePairingSession() {
+      try {
+        const restoredSession = await getPairingSessionStatus(initialPairing)
+        if (!isMounted) {
+          return
+        }
+
+        const nextSession = mergePairingSession(initialPairing, restoredSession)
+        if (nextSession.status === 'success') {
+          setPairing(nextSession)
+          setPairingStatus('success')
+          setIsPaired(true)
+          setMode('alert')
+          setStatusMessage('')
+          return
+        }
+
+        clearStoredPairedPairingSession()
+        setPairing(null)
+        setPairingStatus('waiting')
+        setIsPaired(false)
+      } catch {
+        if (!isMounted) {
+          return
+        }
+
+        clearStoredPairedPairingSession()
+        setPairing(null)
+        setPairingStatus('waiting')
+        setIsPaired(false)
+      } finally {
+        if (isMounted) {
+          setIsRestoringPairing(false)
+        }
+      }
+    }
+
+    restorePairingSession()
+
+    return () => {
+      isMounted = false
+    }
+  }, [initialPairing])
+
+  useEffect(() => {
     if (typeof globalThis !== 'undefined') {
       globalThis.__ABLE_BAND_VIBRATION_ENABLED__ = isPaired
     }
@@ -254,41 +326,15 @@ function App() {
     }
   }, [isPaired])
 
-  useEffect(() => {
-    if (!isPaired) {
-      setNotificationSettings(DEFAULT_NOTIFICATION_SETTINGS)
-      setNotificationSettingsReady(true)
-      return undefined
-    }
-
-    let isMounted = true
-
-    async function syncNotificationSettings() {
-      const settings = await getWearableNotificationSettings()
-      if (isMounted) {
-        setNotificationSettings(settings)
-        setNotificationSettingsReady(true)
-      }
-    }
-
-    syncNotificationSettings()
-    const intervalId = window.setInterval(
-      syncNotificationSettings,
-      NOTIFICATION_SETTINGS_SYNC_INTERVAL_MS,
-    )
-
-    return () => {
-      isMounted = false
-      window.clearInterval(intervalId)
-    }
-  }, [isPaired])
-
   useEffect(
     () => () => {
       window.clearTimeout(pairingPollTimerRef.current)
       window.clearTimeout(pairingCompleteTimerRef.current)
       window.clearInterval(uwbVibrationIntervalRef.current)
       stopLivingSignalMonitoring()
+      uwbSpeechStateRef.current.pendingText = ''
+      uwbSpeechStateRef.current.currentText = ''
+      uwbSpeechStateRef.current.utterance = null
       window.speechSynthesis?.cancel()
     },
     [stopLivingSignalMonitoring],
@@ -307,7 +353,7 @@ function App() {
   }, [toastMessage])
 
   useEffect(() => {
-    if (isPaired || isTerminalPairingStatus(pairingStatus)) {
+    if (isRestoringPairing || isPaired || isTerminalPairingStatus(pairingStatus)) {
       return undefined
     }
 
@@ -375,7 +421,7 @@ function App() {
       isMounted = false
       window.clearTimeout(pairingPollTimerRef.current)
     }
-  }, [completePairing, isPaired, pairingGeneration, pairingStatus])
+  }, [completePairing, isPaired, isRestoringPairing, pairingGeneration, pairingStatus])
 
   useEffect(() => {
     if (!isPaired) {
@@ -424,102 +470,14 @@ function App() {
   }, [alertStatuses, isPaired, mode, resetPairingSession])
 
   useEffect(() => {
-    if (!isPaired) {
-      return undefined
-    }
-
-    if (!isMicrophoneSupported() || microphonePreflightRequestedRef.current) {
-      return undefined
-    }
-
-    microphonePreflightRequestedRef.current = true
-    let isMounted = true
-
-    async function requestMicrophonePermission() {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-        stream.getTracks().forEach((track) => track.stop())
-      } catch (error) {
-        if (!isMounted) {
-          return
-        }
-
-        setLivingSignalState((current) => ({
-          ...current,
-          error:
-            error?.message || '생활 신호 감지를 위해 마이크 권한을 허용해주세요.',
-        }))
-      }
-    }
-
-    requestMicrophonePermission()
-
-    return () => {
-      isMounted = false
-    }
-  }, [isPaired])
-
-  useEffect(() => {
-    if (!isPaired) {
-      return undefined
-    }
-
-    let isMounted = true
-
-    async function syncLivingSignalConfig() {
-      try {
-        const state = await getWearableLivingSignalState()
-        if (!isMounted) {
-          return
-        }
-
-        const nextConfig = {
-          threshold: state.threshold ?? 0.8,
-          sounds: state.sounds || [],
-        }
-        const nextConfigKey = getLivingSignalConfigKey(nextConfig)
-        livingSignalConfigKeyRef.current = nextConfigKey
-        setLivingSignalConfig((current) =>
-          getLivingSignalConfigKey(current) === nextConfigKey ? current : nextConfig,
-        )
-        setLivingSignalState((current) => ({
-          ...current,
-          threshold: nextConfig.threshold,
-          sounds: nextConfig.sounds,
-          error: '',
-        }))
-      } catch (error) {
-        if (!isMounted) {
-          return
-        }
-
-        if (isAuthExpiredError(error)) {
-          resetPairingSession('')
-          return
-        }
-
-        setLivingSignalState((current) => ({
-          ...current,
-          error: error.message || '생활 신호 설정을 불러오지 못했습니다.',
-        }))
-      }
-    }
-
-    syncLivingSignalConfig()
-    const intervalId = window.setInterval(syncLivingSignalConfig, LIVING_SIGNAL_SYNC_INTERVAL_MS)
-
-    return () => {
-      isMounted = false
-      window.clearInterval(intervalId)
-    }
-  }, [isPaired, resetPairingSession])
-
-  useEffect(() => {
     if (
       !isPaired ||
       isChatbotWakeListening ||
       isChatbotOpen ||
-      isChatbotSpeaking
+      isChatbotSpeaking ||
+      mode === 'idle' ||
+      mode === 'uwb' ||
+      mode === 'emergency'
     ) {
       stopLivingSignalMonitoring()
       return undefined
@@ -538,19 +496,25 @@ function App() {
 
     async function startMonitoring() {
       try {
-        if (!livingSignalConfig.sounds.length) {
-          setLivingSignalState((current) => ({
-            ...current,
-            isListening: false,
-            level: 0,
-            error: '',
-          }))
+        const state = await getWearableLivingSignalState()
+        if (!isMounted) {
+          return
+        }
+
+        setLivingSignalState((current) => ({
+          ...current,
+          threshold: state.threshold ?? 0.8,
+          sounds: state.sounds || [],
+          error: '',
+        }))
+
+        if (!state.sounds?.length) {
           return
         }
 
         const session = await createWearableLivingSignalSession({
-          sounds: livingSignalConfig.sounds,
-          threshold: livingSignalConfig.threshold ?? 0.8,
+          sounds: state.sounds,
+          threshold: state.threshold ?? 0.8,
           onLevel: (level) => {
             if (!isMounted) {
               return
@@ -582,24 +546,18 @@ function App() {
             }
 
             try {
-              const createdAlertResponse = await createLivingSignalDetectionAlert({
+              const createdAlert = await createLivingSignalDetectionAlert({
                 registeredSoundName: match.registeredSoundName,
                 soundType: match.soundType,
                 similarity: Number(match.similarity.toFixed(4)),
                 detectedAt: match.detectedAt,
               })
-              const createdAlert = normalizeDetectedAlert(createdAlertResponse, match)
 
               if (!isMounted) {
                 return
               }
 
-              if (createdAlert.alertId) {
-                knownAlertIdsRef.current = new Set([
-                  ...knownAlertIdsRef.current,
-                  createdAlert.alertId,
-                ])
-              }
+              announcedAlertIdRef.current = createdAlert.alertId
               setLivingSignalState((current) => ({
                 ...current,
                 lastMatch: match,
@@ -609,6 +567,8 @@ function App() {
               setAlertIndex(0)
               setMode('alert')
               setStatusMessage(`${match.registeredSoundName} 감지`)
+              triggerVibration(vibrationPatternForAlert(createdAlert))
+              speakText(createdAlert.voiceGuide || createdAlert.message)
             } catch (error) {
               if (!isMounted) {
                 return
@@ -647,24 +607,10 @@ function App() {
       isMounted = false
       stopLivingSignalMonitoring()
     }
-  }, [
-    isChatbotOpen,
-    isChatbotSpeaking,
-    isChatbotWakeListening,
-    isPaired,
-    livingSignalConfig,
-    mode,
-    notifyVibration,
-    speakText,
-    stopLivingSignalMonitoring,
-  ])
+  }, [isChatbotOpen, isChatbotSpeaking, isChatbotWakeListening, isPaired, mode, speakText, stopLivingSignalMonitoring])
 
   useEffect(() => {
-    if (!notificationSettingsReady || !selectedAlert?.alertId) {
-      return
-    }
-
-    if (mode !== 'alert') {
+    if (!selectedAlert?.alertId) {
       return
     }
 
@@ -673,34 +619,30 @@ function App() {
     }
 
     announcedAlertIdRef.current = selectedAlert.alertId
-    notifyVibration(vibrationPatternForAlert(selectedAlert))
+    triggerVibration(vibrationPatternForAlert(selectedAlert))
     speakText(selectedAlert.voiceGuide || selectedAlert.message)
-  }, [mode, notificationSettingsReady, notifyVibration, selectedAlert, speakText])
+  }, [selectedAlert, speakText])
 
   useEffect(() => {
-    if (!notificationSettingsReady || mode !== 'uwb' || !activeUwbSession?.voiceGuide) {
+    if (mode !== 'uwb' || !activeUwbSession?.voiceGuide) {
+      if (uwbSpeechStateRef.current.utterance && typeof window !== 'undefined') {
+        window.speechSynthesis?.cancel?.()
+      }
+      uwbSpeechStateRef.current.pendingText = ''
+      uwbSpeechStateRef.current.currentText = ''
+      uwbSpeechStateRef.current.utterance = null
       return
     }
 
     const voiceKey = `${activeUwbSession.sessionId}:${activeUwbSession.navigationStatus}:${activeUwbSession.voiceGuide}`
-    if (announcedUwbMessageRef.current === voiceKey) {
-      return
-    }
-
     announcedUwbMessageRef.current = voiceKey
-    speakText(activeUwbSession.voiceGuide)
-  }, [activeUwbSession, mode, notificationSettingsReady, speakText])
+    speakUwbGuide(activeUwbSession.voiceGuide)
+  }, [activeUwbSession, mode, speakUwbGuide])
 
   useEffect(() => {
     window.clearInterval(uwbVibrationIntervalRef.current)
 
-    if (
-      !isPaired ||
-      !notificationSettingsReady ||
-      mode !== 'uwb' ||
-      !activeUwbSession ||
-      !notificationSettings.vibrationGuide
-    ) {
+    if (!isPaired || mode !== 'uwb' || !activeUwbSession) {
       if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
         navigator.vibrate(0)
       }
@@ -712,19 +654,19 @@ function App() {
       return undefined
     }
 
-    notifyVibration(nextPattern)
+    triggerVibration(nextPattern)
     uwbVibrationIntervalRef.current = window.setInterval(() => {
-      notifyVibration(nextPattern)
+      triggerVibration(nextPattern)
     }, getRepeatingUwbVibrationIntervalMs(nextPattern))
 
     return () => window.clearInterval(uwbVibrationIntervalRef.current)
   }, [
-    activeUwbSession,
+    activeUwbSession?.distanceM,
+    activeUwbSession?.navigationStatus,
+    activeUwbSession?.sessionId,
+    activeUwbSession?.vibrationPattern,
     isPaired,
     mode,
-    notificationSettings.vibrationGuide,
-    notificationSettingsReady,
-    notifyVibration,
   ])
 
   useEffect(() => {
@@ -811,7 +753,7 @@ function App() {
     setIsBusy(true)
     try {
       const confirmed = await confirmAlert(selectedAlert.alertId)
-      notifyVibration('MEDIUM')
+      triggerVibration('MEDIUM')
       setAlertStatuses((currentStatuses) => ({
         ...currentStatuses,
         [selectedAlert.alertId]: confirmed.status,
@@ -856,7 +798,7 @@ function App() {
       isUwbPollingRef.current = false
       setIsUwbPolling(false)
       const stopped = await stopUwbSession(currentSessionId)
-      notifyVibration(stopped.vibrationPattern)
+      triggerVibration(stopped.vibrationPattern)
       setUwbSession(stopped)
       setMode('deviceSelect')
       setStatusMessage('위치 안내를 종료했습니다. 다른 가전을 선택할 수 있습니다.')
@@ -872,7 +814,7 @@ function App() {
     setStatusMessage('긴급 요청을 보내는 중입니다.')
     try {
       const response = await requestEmergencyHelp('웨어러블에서 긴급 요청')
-      notifyVibration('LONG_TWICE')
+      triggerVibration('LONG_TWICE')
       setStatusMessage(
         response.message
           ? `${response.message} 보호자에게도 확인 요청을 전달했습니다.`
@@ -980,7 +922,6 @@ function App() {
             onOpenChange={setIsChatbotOpen}
             onSpeakingChange={setIsChatbotSpeaking}
             onWakeListeningChange={setIsChatbotWakeListening}
-            notificationSettings={notificationSettings}
             showFab={false}
             statusMessage={inlineStatusMessage}
             uwbSession={uwbSession}
@@ -1032,7 +973,6 @@ function App() {
             onOpenChange={setIsChatbotOpen}
             onSpeakingChange={setIsChatbotSpeaking}
             onWakeListeningChange={setIsChatbotWakeListening}
-            notificationSettings={notificationSettings}
             showFab={false}
             statusMessage={inlineStatusMessage}
             uwbSession={uwbSession}
@@ -1209,15 +1149,25 @@ function DeviceSelectScreen({ actionMessage, devices = [], isBusy, onSelect }) {
           <article className="device-select-card" key={device.deviceId || device.name}>
             <div className="device-select-card-top">
               <span
-                className={`device-select-icon icon-${device.iconTone} is-svg-icon`}
+                className={
+                  device.type === 'WASHER'
+                    ? `device-select-icon icon-${device.iconTone} is-svg-icon`
+                    : `device-select-icon icon-${device.iconTone}`
+                }
                 aria-hidden="true"
               >
-                {renderWearableDeviceIcon(device.type)}
+                {renderWearableDeviceIcon(device.type, device.icon)}
               </span>
-              <span className={`device-status-dot status-${device.statusTone}`} aria-hidden="true" />
+              <span
+                className={`device-status-dot status-${device.statusTone}`}
+                aria-label={device.connectionStatus === 'CONNECTED' ? '연결됨' : '연결 안 됨'}
+                role="img"
+              />
             </div>
             <div className="device-select-copy">
-              <span className="device-select-name">{device.name}</span>
+              <div className="device-select-title-row">
+                <span className="device-select-name">{device.name}</span>
+              </div>
             </div>
             <button
               className="primary-action device-select-action"
@@ -1237,6 +1187,20 @@ function DeviceSelectScreen({ actionMessage, devices = [], isBusy, onSelect }) {
       ) : null}
     </section>
   )
+}
+
+function renderWearableDeviceIcon(type, fallbackIcon) {
+  if (type === 'WASHER') {
+    return (
+      <svg viewBox="0 0 48 48" focusable="false">
+        <rect x="10" y="7" width="28" height="34" rx="5" />
+        <circle cx="24" cy="27" r="9" />
+        <path d="M16 14h7M30 14h2" />
+      </svg>
+    )
+  }
+
+  return fallbackIcon
 }
 
 function applyStoredAlertStatus(alert, alertStatuses) {
@@ -1351,46 +1315,6 @@ function formatEmergencyErrorMessage(error) {
   return messages[error?.code] || error?.message || messages.SERVER_ERROR
 }
 
-function getLivingSignalConfigKey(config) {
-  const sounds = (config?.sounds || []).map((sound) => ({
-    soundId: sound.soundId,
-    soundType: sound.soundType,
-    updatedAt: sound.updatedAt || '',
-    recordings: (sound.recordings || []).map((recording) => ({
-      recordingId: recording.recordingId,
-      label: recording.label,
-      createdAt: recording.createdAt || '',
-    })),
-  }))
-
-  return JSON.stringify({
-    threshold: config?.threshold ?? 0.8,
-    sounds,
-  })
-}
-
-function normalizeDetectedAlert(alert, match) {
-  return {
-    alertId: alert?.alertId || alert?.id || `living-signal-${match.soundId}-${match.detectedAt}`,
-    type: alert?.type || alert?.alertType || 'LIFE',
-    severity: alert?.severity || 'LOW',
-    title: alert?.title || `${match.registeredSoundName} 감지`,
-    message:
-      alert?.message ||
-      `${match.registeredSoundName} 생활 알림음이 감지되었습니다.`,
-    voiceGuide:
-      alert?.voiceGuide ||
-      alert?.message ||
-      `${match.registeredSoundName} 생활 알림음이 감지되었습니다.`,
-    deviceName: alert?.deviceName || 'LG Able Band',
-    locationName: alert?.locationName || '현재 위치',
-    occurredAt: alert?.occurredAt || alert?.createdAt || match.detectedAt,
-    status: alert?.status || (alert?.isRead ? 'CONFIRMED' : 'UNREAD'),
-    vibrationPattern: alert?.vibrationPattern || 'MEDIUM',
-    requiresGuardianNotify: alert?.requiresGuardianNotify ?? false,
-  }
-}
-
 function buildActiveGuideSession(bleGuide, uwbSession, selectedGuideTarget) {
   if (selectedGuideTarget || bleGuide.targetName || bleGuide.status !== 'idle') {
     const distanceM = Number.isFinite(bleGuide.distanceM) ? Number(bleGuide.distanceM.toFixed(1)) : 0
@@ -1430,11 +1354,15 @@ function mapBleGuideStatusToNavigation(status, distanceM) {
 
 function vibrationPatternForBleDistance(distanceM) {
   if (!Number.isFinite(distanceM)) {
-    return 'NONE'
+    return 'SLOW'
   }
 
-  if (distanceM <= 1) {
+  if (distanceM <= 0.8) {
     return 'LONG_TWICE'
+  }
+
+  if (distanceM <= 1.8) {
+    return 'FAST'
   }
 
   if (distanceM <= 3) {
@@ -1457,7 +1385,11 @@ function getRepeatingUwbVibrationPattern(session) {
     return 'LONG_TWICE'
   }
 
-  return session.vibrationPattern || 'NONE'
+  if (session.vibrationPattern && session.vibrationPattern !== 'NONE') {
+    return session.vibrationPattern
+  }
+
+  return 'SLOW'
 }
 
 function getRepeatingUwbVibrationIntervalMs(pattern) {
@@ -1478,72 +1410,6 @@ function clamp(value, min, max) {
 
 function isGuardianConnectionToast(message) {
   return typeof message === 'string' && message.includes('연결된 보호자가 없습니다')
-}
-
-function renderWearableDeviceIcon(type) {
-  if (type === 'WASHER') {
-    return (
-      <svg viewBox="0 0 48 48" focusable="false">
-        <rect x="10" y="7" width="28" height="34" rx="5" />
-        <circle cx="24" cy="27" r="9" />
-        <path d="M16 14h7M30 14h2" />
-      </svg>
-    )
-  }
-
-  if (type === 'TV') {
-    return (
-      <svg viewBox="0 0 48 48" focusable="false">
-        <rect x="7" y="11" width="34" height="22" rx="4" />
-        <path d="M20 37h8M24 33v4" />
-      </svg>
-    )
-  }
-
-  if (type === 'RANGE') {
-    return (
-      <svg viewBox="0 0 48 48" focusable="false">
-        <rect x="9" y="10" width="30" height="28" rx="5" />
-        <circle cx="18" cy="20" r="4" />
-        <circle cx="30" cy="20" r="4" />
-        <path d="M18 31h12M24 28v6" />
-      </svg>
-    )
-  }
-
-  if (type === 'DOOR_SENSOR') {
-    return (
-      <svg viewBox="0 0 48 48" focusable="false">
-        <path d="M14 8h19v32H14z" />
-        <path d="M33 15h5v18h-5M28 24h1" />
-      </svg>
-    )
-  }
-
-  if (type === 'AIR_SENSOR') {
-    return (
-      <svg viewBox="0 0 48 48" focusable="false">
-        <rect x="16" y="7" width="16" height="34" rx="8" />
-        <path d="M12 18c-4 3-4 8 0 11M36 18c4 3 4 8 0 11M20 18h8M20 25h8M21 32h6" />
-      </svg>
-    )
-  }
-
-  if (type === 'REFRIGERATOR' || type === 'FRIDGE') {
-    return (
-      <svg viewBox="0 0 48 48" focusable="false">
-        <rect x="14" y="6" width="20" height="36" rx="4" />
-        <path d="M14 22h20M29 14h1M29 30h1" />
-      </svg>
-    )
-  }
-
-  return (
-    <svg viewBox="0 0 48 48" focusable="false">
-      <rect x="10" y="10" width="28" height="28" rx="6" />
-      <path d="M16 24h16" />
-    </svg>
-  )
 }
 
 export default App

@@ -8,12 +8,12 @@ export const mockAccounts = [
       role: 'USER',
       account: {
         accountId: 1,
-        name: '소희',
+        name: '엘지',
         email: 'user@example.com',
       },
       userProfile: {
         userId: 1,
-        name: '소희',
+        name: '엘지',
         accessibilityType: 'VISUAL',
       },
     },

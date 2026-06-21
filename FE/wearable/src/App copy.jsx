@@ -43,7 +43,7 @@ const ALERT_POLL_INTERVAL_MS = 3000
 const BOTTOM_SHEET_COLLAPSED_PEEK = 34
 
 function App() {
-  const [initialPairing] = useState(() => getStoredPairedPairingSession())
+  const initialPairing = getStoredPairedPairingSession()
   const [isPaired, setIsPaired] = useState(false)
   const [mode, setMode] = useState('alert')
   const [pairingStatus, setPairingStatus] = useState(getInitialPairingStatus())
@@ -55,7 +55,7 @@ function App() {
   const [alertStatuses, setAlertStatuses] = useState({})
   const [uwbSession, setUwbSession] = useState(null)
   const [uwbTargets, setUwbTargets] = useState([])
-  const [isUwbTargetLoading, setIsUwbTargetLoading] = useState(false)
+  const [, setIsUwbTargetLoading] = useState(false)
   const [isUwbPolling, setIsUwbPolling] = useState(true)
   const [statusMessage, setStatusMessage] = useState('')
   const [isBusy, setIsBusy] = useState(false)
@@ -614,10 +614,6 @@ function App() {
       return
     }
 
-    if (mode !== 'alert') {
-      return
-    }
-
     if (announcedAlertIdRef.current === selectedAlert.alertId) {
       return
     }
@@ -625,7 +621,7 @@ function App() {
     announcedAlertIdRef.current = selectedAlert.alertId
     triggerVibration(vibrationPatternForAlert(selectedAlert))
     speakText(selectedAlert.voiceGuide || selectedAlert.message)
-  }, [mode, selectedAlert, speakText])
+  }, [selectedAlert, speakText])
 
   useEffect(() => {
     if (mode !== 'uwb' || !activeUwbSession?.voiceGuide) {
@@ -653,15 +649,6 @@ function App() {
       return undefined
     }
 
-    const isBleGuideSession = String(activeUwbSession.sessionId || '').startsWith('ble-')
-    const isBleDistanceReady = bleGuide.status === 'active' && Number.isFinite(bleGuide.distanceM)
-    if (isBleGuideSession && !isBleDistanceReady) {
-      if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
-        navigator.vibrate(0)
-      }
-      return undefined
-    }
-
     const nextPattern = getRepeatingUwbVibrationPattern(activeUwbSession)
     if (nextPattern === 'NONE') {
       return undefined
@@ -678,8 +665,6 @@ function App() {
     activeUwbSession?.navigationStatus,
     activeUwbSession?.sessionId,
     activeUwbSession?.vibrationPattern,
-    bleGuide.distanceM,
-    bleGuide.status,
     isPaired,
     mode,
   ])
