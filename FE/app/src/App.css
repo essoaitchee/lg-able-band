@@ -9403,6 +9403,10 @@ h2 {
   align-content: center;
   gap: 18px;
   padding: 22px 18px 18px;
+  min-height: 100dvh;
+  height: auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .phone-screen.login-screen .login-panel,
@@ -9411,6 +9415,7 @@ h2 {
   gap: 14px;
   width: 100%;
   padding: 18px;
+  max-height: none;
 }
 
 .phone-screen.login-screen .login-panel,
@@ -9425,6 +9430,18 @@ h2 {
   text-align: center;
   gap: 10px;
   padding-inline: 6px;
+}
+
+.phone-screen.signup-screen .signup-brand-logo {
+  width: min(72%, 220px);
+  height: auto;
+  display: block;
+}
+
+.phone-screen.signup-screen #signup-title {
+  margin: 0;
+  font-size: clamp(1.6rem, 4.2vw, 2rem);
+  line-height: 1.1;
 }
 
 .phone-screen.login-screen .eyebrow,
