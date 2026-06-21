@@ -3849,7 +3849,7 @@ h3 {
 }
 
 .emergency-card .sos-button {
-  background: #f04452;
+  background: #e11d48;
   color: #ffffff;
   border: 0;
 }
@@ -4265,7 +4265,7 @@ h3 {
   --app-text-muted: #9aa3af;
   --app-primary: #e11d48;
   --app-primary-soft: #fff4f7;
-  --app-primary-strong: #b81b42;
+  --app-primary-strong: #be123c;
   --app-shadow-sm: 0 6px 18px rgba(17, 24, 39, 0.04);
   --app-shadow-md: 0 12px 28px rgba(17, 24, 39, 0.06);
   --app-shadow-lg: 0 18px 40px rgba(17, 24, 39, 0.08);
@@ -5092,6 +5092,11 @@ h2 {
   box-shadow: 0 10px 26px rgba(15, 23, 42, 0.05);
 }
 
+.phone-screen .living-signal-list-section-loading {
+  gap: 8px;
+  padding: 14px 14px 10px;
+}
+
 .phone-screen .living-signal-header {
   gap: 6px;
 }
@@ -5351,12 +5356,29 @@ h2 {
 
 
 .phone-screen .living-signal-loading-state {
-  gap: 10px;
-  padding: 14px;
-  border: 1px solid var(--app-border);
-  border-radius: 16px;
-  background: #fbfbfa;
+  gap: 8px;
+  padding: 10px 0 2px;
+  border: 0;
+  border-top: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 0;
+  background: transparent;
   box-shadow: none;
+}
+
+.phone-screen .living-signal-loading-header {
+  align-items: center;
+  gap: 0;
+}
+
+.phone-screen .living-signal-loading-header .device-add-hero {
+  align-items: center !important;
+  gap: 8px !important;
+}
+
+.phone-screen .living-signal-loading-main {
+  grid-template-columns: 46px minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
 }
 
 .phone-screen .living-signal-loading-visual {
@@ -5377,30 +5399,45 @@ h2 {
 }
 
 .phone-screen .living-signal-loading-copy {
-  gap: 4px;
+  gap: 2px;
+  padding-top: 1px;
 }
 
 .phone-screen .living-signal-loading-copy strong {
   color: var(--app-text-strong);
-  font-size: 15px;
+  font-size: 15.4px;
   font-weight: 540 !important;
   letter-spacing: -0.02em;
+  line-height: 1.3;
 }
 
 .phone-screen .living-signal-loading-copy p {
   margin: 0;
   color: var(--app-text-soft);
-  font-size: 12.8px;
-  line-height: 1.5;
+  font-size: 12.4px;
+  line-height: 1.45;
 }
 
 .phone-screen .living-signal-loading-skeleton {
-  gap: 7px;
+  gap: 6px;
+  padding: 2px 0 0 58px;
 }
 
 .phone-screen .living-signal-loading-skeleton span {
-  height: 8px;
+  height: 7px;
   border-radius: 999px;
+}
+
+.phone-screen .living-signal-loading-skeleton span:nth-child(1) {
+  width: 88%;
+}
+
+.phone-screen .living-signal-loading-skeleton span:nth-child(2) {
+  width: 68%;
+}
+
+.phone-screen .living-signal-loading-skeleton span:nth-child(3) {
+  width: 52%;
 }
 
 .phone-screen .living-signal-recording-indicator {
@@ -6364,7 +6401,7 @@ h2 {
 }
 
 .voice-info-card-top::after {
-  content: "♥";
+  content: "\2665";
   position: absolute;
   top: 4px;
   right: 0;
@@ -8165,6 +8202,11 @@ h2 {
 .phone-screen .living-signal-mic-section {
   gap: 14px;
   padding: 20px 16px;
+}
+
+.phone-screen .living-signal-list-section-loading {
+  gap: 10px;
+  padding: 14px 14px 12px;
 }
 
 .phone-screen .living-signal-section-row {

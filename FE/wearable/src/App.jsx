@@ -1208,14 +1208,16 @@ function DeviceSelectScreen({ actionMessage, devices = [], isBusy, onSelect }) {
         {displayDevices.map((device) => (
           <article className="device-select-card" key={device.deviceId || device.name}>
             <div className="device-select-card-top">
-              <span className={`device-select-icon icon-${device.iconTone}`} aria-hidden="true">
-                {device.icon}
+              <span
+                className={`device-select-icon icon-${device.iconTone} is-svg-icon`}
+                aria-hidden="true"
+              >
+                {renderWearableDeviceIcon(device.type)}
               </span>
               <span className={`device-status-dot status-${device.statusTone}`} aria-hidden="true" />
             </div>
             <div className="device-select-copy">
               <span className="device-select-name">{device.name}</span>
-              <span className="device-select-status">{device.status}</span>
             </div>
             <button
               className="primary-action device-select-action"
@@ -1476,6 +1478,72 @@ function clamp(value, min, max) {
 
 function isGuardianConnectionToast(message) {
   return typeof message === 'string' && message.includes('연결된 보호자가 없습니다')
+}
+
+function renderWearableDeviceIcon(type) {
+  if (type === 'WASHER') {
+    return (
+      <svg viewBox="0 0 48 48" focusable="false">
+        <rect x="10" y="7" width="28" height="34" rx="5" />
+        <circle cx="24" cy="27" r="9" />
+        <path d="M16 14h7M30 14h2" />
+      </svg>
+    )
+  }
+
+  if (type === 'TV') {
+    return (
+      <svg viewBox="0 0 48 48" focusable="false">
+        <rect x="7" y="11" width="34" height="22" rx="4" />
+        <path d="M20 37h8M24 33v4" />
+      </svg>
+    )
+  }
+
+  if (type === 'RANGE') {
+    return (
+      <svg viewBox="0 0 48 48" focusable="false">
+        <rect x="9" y="10" width="30" height="28" rx="5" />
+        <circle cx="18" cy="20" r="4" />
+        <circle cx="30" cy="20" r="4" />
+        <path d="M18 31h12M24 28v6" />
+      </svg>
+    )
+  }
+
+  if (type === 'DOOR_SENSOR') {
+    return (
+      <svg viewBox="0 0 48 48" focusable="false">
+        <path d="M14 8h19v32H14z" />
+        <path d="M33 15h5v18h-5M28 24h1" />
+      </svg>
+    )
+  }
+
+  if (type === 'AIR_SENSOR') {
+    return (
+      <svg viewBox="0 0 48 48" focusable="false">
+        <rect x="16" y="7" width="16" height="34" rx="8" />
+        <path d="M12 18c-4 3-4 8 0 11M36 18c4 3 4 8 0 11M20 18h8M20 25h8M21 32h6" />
+      </svg>
+    )
+  }
+
+  if (type === 'REFRIGERATOR' || type === 'FRIDGE') {
+    return (
+      <svg viewBox="0 0 48 48" focusable="false">
+        <rect x="14" y="6" width="20" height="36" rx="4" />
+        <path d="M14 22h20M29 14h1M29 30h1" />
+      </svg>
+    )
+  }
+
+  return (
+    <svg viewBox="0 0 48 48" focusable="false">
+      <rect x="10" y="10" width="28" height="28" rx="6" />
+      <path d="M16 24h16" />
+    </svg>
+  )
 }
 
 export default App
