@@ -12,7 +12,7 @@ export function StatusPanel({
     <section className="status-panel">
       <div className="status-panel-header">
         <div>
-          <p className="status-eyebrow">상태 패널</p>
+          <p className="status-eyebrow">상태 요약</p>
           <h2>{applianceName}</h2>
         </div>
       </div>

@@ -1,28 +1,28 @@
 import { useState } from 'react'
-import { ApplianceSidebar } from './components/layout/ApplianceSidebar'
-import { ApplianceScene } from './scenes/ApplianceScene'
-import { StatusPanel } from './components/common/StatusPanel'
 import { NotificationResult } from './components/common/NotificationResult'
+import { StatusPanel } from './components/common/StatusPanel'
+import { ApplianceSidebar } from './components/layout/ApplianceSidebar'
 import { useSimulatorController } from './hooks/useSimulatorController'
+import { ApplianceScene } from './scenes/ApplianceScene'
 
 function App() {
   const [selectedApplianceId, setSelectedApplianceId] = useState('washingMachine')
-  const [targetUserId, setTargetUserId] = useState('1')
+  const [targetUserEmail, setTargetUserEmail] = useState('lglg@lgableband.com')
   const { currentState, latestEvent, notificationResult, busyAction, statusView, actions } =
-    useSimulatorController(selectedApplianceId, targetUserId)
+    useSimulatorController(selectedApplianceId, targetUserEmail)
 
   return (
     <div className="sim-app">
       <ApplianceSidebar
         selectedApplianceId={selectedApplianceId}
-        targetUserId={targetUserId}
-        onChangeUserId={setTargetUserId}
+        targetUserEmail={targetUserEmail}
+        onChangeUserEmail={setTargetUserEmail}
         onSelect={setSelectedApplianceId}
       />
 
       <main className="sim-main">
         <div className="sim-stage-grid">
-          <ApplianceScene applianceId={selectedApplianceId} sceneState={currentState} />
+          <ApplianceScene applianceId={selectedApplianceId} sceneState={currentState} actions={actions} />
 
           <StatusPanel
             applianceName={statusView.applianceName}
@@ -33,28 +33,7 @@ function App() {
             latestEvent={latestEvent}
             notificationResult={notificationResult}
           >
-            {selectedApplianceId === 'washingMachine' ? (
-              <>
-                <div className="button-row">
-                  <button disabled={Boolean(busyAction)} type="button" onClick={actions.startWashing}>
-                    세탁 시작
-                  </button>
-                  <button disabled={Boolean(busyAction)} type="button" onClick={actions.openDoor}>
-                    문 열기
-                  </button>
-                  <button disabled={Boolean(busyAction)} type="button" onClick={actions.triggerError}>
-                    오류 발생
-                  </button>
-                </div>
-                <div className="button-row">
-                  {['표준', '쾌속', '탈수'].map((mode) => (
-                    <button key={mode} disabled={Boolean(busyAction)} type="button" onClick={() => actions.changeMode(mode)}>
-                      {mode}
-                    </button>
-                  ))}
-                </div>
-              </>
-            ) : null}
+            {selectedApplianceId === 'washingMachine' ? null : null}
 
             {selectedApplianceId === 'airQualitySensor' ? (
               <>
@@ -140,19 +119,17 @@ function App() {
             ) : null}
 
             {selectedApplianceId === 'doorSensor' ? (
-              <>
-                <div className="button-row">
-                  <button disabled={Boolean(busyAction)} type="button" onClick={actions.openDoor}>
-                    문 열기
-                  </button>
-                  <button disabled={Boolean(busyAction)} type="button" onClick={actions.awayMode}>
-                    외출 모드
-                  </button>
-                  <button disabled={Boolean(busyAction)} type="button" onClick={actions.sleepMode}>
-                    취침 모드
-                  </button>
-                </div>
-              </>
+              <div className="button-row">
+                <button disabled={Boolean(busyAction)} type="button" onClick={actions.openDoor}>
+                  문 열기
+                </button>
+                <button disabled={Boolean(busyAction)} type="button" onClick={actions.awayMode}>
+                  외출 모드
+                </button>
+                <button disabled={Boolean(busyAction)} type="button" onClick={actions.sleepMode}>
+                  취침 모드
+                </button>
+              </div>
             ) : null}
 
             {selectedApplianceId === 'refrigerator' ? (

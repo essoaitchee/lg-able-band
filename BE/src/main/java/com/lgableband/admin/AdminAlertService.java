@@ -375,7 +375,7 @@ public class AdminAlertService {
 
 	public SimulatorEventResponse dispatchSimulatorEvent(
 		String authorization,
-		long targetUserId,
+		String targetUserEmail,
 		String applianceType,
 		String eventType,
 		String title,
@@ -383,13 +383,13 @@ public class AdminAlertService {
 	) {
 		requireAdmin(authorization);
 		log.info(
-			"Simulator event request received: targetUserId={}, applianceType={}, eventType={}, title={}",
-			targetUserId,
+			"Simulator event request received: targetUserEmail={}, applianceType={}, eventType={}, title={}",
+			targetUserEmail,
 			applianceType,
 			eventType,
 			title
 		);
-		if (targetUserId <= 0) {
+		if (targetUserEmail == null || targetUserEmail.isBlank()) {
 			throw new ApiException(HttpStatus.BAD_REQUEST, "INVALID_TARGET_USER", "대상 사용자 ID를 입력해주세요.");
 		}
 		if (applianceType == null || applianceType.isBlank()) {
@@ -408,8 +408,10 @@ public class AdminAlertService {
 		SimulatorEventTemplate template = SimulatorEventTemplate.from(applianceType, eventType, title, message);
 		OffsetDateTime occurredAt = OffsetDateTime.now(SERVICE_OFFSET);
 		JdbcTemplate jdbcTemplate = jdbcTemplateProvider.getIfAvailable();
+		String normalizedTargetUserEmail = targetUserEmail.trim().toLowerCase(Locale.ROOT);
 
 		if (jdbcTemplate == null) {
+			long targetUserId = resolveMockUserIdByEmail(normalizedTargetUserEmail);
 			mockDataStore.user(targetUserId);
 			mockDataStore.addContextAlert(
 				targetUserId,
@@ -431,12 +433,19 @@ public class AdminAlertService {
 			);
 		}
 
+		long targetUserId;
 		try {
-			jdbcTemplate.queryForObject(
-				"SELECT user_id FROM app_user WHERE user_id = ?",
+			Long resolvedUserId = jdbcTemplate.queryForObject(
+				"""
+				SELECT u.user_id
+				FROM app_user u
+				JOIN account a ON a.account_id = u.account_id
+				WHERE LOWER(a.email) = ?
+				""",
 				(rs, rowNum) -> rs.getLong("user_id"),
-				targetUserId
+				normalizedTargetUserEmail
 			);
+			targetUserId = resolvedUserId == null ? 0 : resolvedUserId;
 		}
 		catch (EmptyResultDataAccessException exception) {
 			throw new ApiException(HttpStatus.NOT_FOUND, "RESOURCE_NOT_FOUND", "대상 사용자를 찾을 수 없습니다.");
@@ -446,7 +455,8 @@ public class AdminAlertService {
 		long eventId = insertDeviceEvent(jdbcTemplate, deviceId, template.toAlertTemplate(), occurredAt);
 		insertAlert(jdbcTemplate, targetUserId, eventId, template.toAlertTemplate(), occurredAt);
 		log.info(
-			"Simulator event created successfully: targetUserId={}, deviceId={}, eventId={}, applianceType={}, eventType={}",
+			"Simulator event created successfully: targetUserEmail={}, targetUserId={}, deviceId={}, eventId={}, applianceType={}, eventType={}",
+			normalizedTargetUserEmail,
 			targetUserId,
 			deviceId,
 			eventId,
@@ -470,6 +480,16 @@ public class AdminAlertService {
 		}
 
 		return audience.accessibilityType() == accessibilityType;
+	}
+
+	private long resolveMockUserIdByEmail(String normalizedEmail) {
+		if ("lglg@lgableband.com".equals(normalizedEmail)) {
+			return 1L;
+		}
+		if ("admin@example.com".equals(normalizedEmail)) {
+			return 3L;
+		}
+		throw new ApiException(HttpStatus.NOT_FOUND, "RESOURCE_NOT_FOUND", "대상 사용자 이메일을 찾을 수 없습니다.");
 	}
 
 	private MvpDataService.CurrentUser requireAdmin(String authorization) {

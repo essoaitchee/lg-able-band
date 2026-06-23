@@ -1,6 +1,6 @@
 import { APPLIANCES } from '../../constants/applianceEvents'
 
-export function ApplianceSidebar({ selectedApplianceId, targetUserId, onChangeUserId, onSelect }) {
+export function ApplianceSidebar({ selectedApplianceId, targetUserEmail, onChangeUserEmail, onSelect }) {
   return (
     <aside className="sim-sidebar">
       <div className="sim-sidebar-block">
@@ -9,10 +9,10 @@ export function ApplianceSidebar({ selectedApplianceId, targetUserId, onChangeUs
 
       <label className="sim-field">
         <input
-          type="text"
-          value={targetUserId}
-          placeholder="사용자 ID를 입력하세요"
-          onChange={(event) => onChangeUserId(event.target.value)}
+          type="email"
+          value={targetUserEmail}
+          placeholder="사용자 이메일을 입력하세요"
+          onChange={(event) => onChangeUserEmail(event.target.value)}
         />
       </label>
 

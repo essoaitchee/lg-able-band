@@ -38,7 +38,7 @@ public class AdminAlertController {
 	) {
 		return this.adminAlertService.dispatchSimulatorEvent(
 			authorization,
-			request.targetUserId(),
+			request.targetUserEmail(),
 			request.applianceType(),
 			request.eventType(),
 			request.title(),
@@ -53,7 +53,7 @@ public class AdminAlertController {
 	}
 
 	public record SimulatorEventRequest(
-		long targetUserId,
+		String targetUserEmail,
 		String applianceType,
 		String eventType,
 		String title,
