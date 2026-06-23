@@ -108,12 +108,13 @@ export function AlertsTab({
   accessibilityType,
   alerts,
   alertView = 'list',
+  initialFilter = 'ALL',
   onAlertDelete = () => {},
   onAlertRestore = () => {},
   onAlertStatusChange = () => {},
 }) {
   const [alertItems, setAlertItems] = useState(() => alerts)
-  const [activeFilter, setActiveFilter] = useState('ALL')
+  const [activeFilter, setActiveFilter] = useState(initialFilter)
   const [selectedAlertId, setSelectedAlertId] = useState(null)
   const [feedbackMessage, setFeedbackMessage] = useState('')
   const [inlineFeedback, setInlineFeedback] = useState(null)
@@ -203,6 +204,14 @@ export function AlertsTab({
 
     setInlineFeedback(null)
     setFeedbackMessage('')
+
+    if (confirmedAlert.localOnly) {
+      setAlertItems((currentAlerts) => currentAlerts.filter((alert) => alert.alertId !== alertId))
+      onAlertDelete(alertId)
+      setSelectedAlertId(null)
+      setFeedbackMessage('테스트 알림을 목록에서 제거했습니다.')
+      return
+    }
 
     try {
       await confirmAlert(alertId)

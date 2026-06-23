@@ -5,6 +5,30 @@ export const SAFETY_STATUS_DISPLAYS = {
   EMERGENCY: { label: '긴급', emoji: '😨' },
 }
 
+const HOME_SAFETY_STATUS_DISPLAYS = {
+  SAFE: { label: '낮음', emoji: '🙂', score: 20 },
+  CAUTION: { label: '주의', emoji: '😐', score: 60 },
+  EMERGENCY: { label: '긴급', emoji: '😨', score: 95 },
+}
+
+const HOME_SAFETY_SUMMARIES = {
+  SAFE: {
+    label: '안전',
+    emoji: '🙂',
+    message: '안전한 상태예요. 확인이 필요한 알림은 없어요.',
+  },
+  CAUTION: {
+    label: '주의',
+    emoji: '😐',
+    message: '주의가 필요한 알림이 있어요. 내용을 확인해 주세요.',
+  },
+  EMERGENCY: {
+    label: '긴급',
+    emoji: '😨',
+    message: '긴급 상황이 감지됐어요. 바로 확인해 주세요.',
+  },
+}
+
 const ACTIONABLE_ALERT_LIMIT = 1
 
 export function getSafetyStatusDisplay(level) {
@@ -12,6 +36,48 @@ export function getSafetyStatusDisplay(level) {
     label: '상태 확인 필요',
     emoji: '🙂',
   }
+}
+
+export function getHomeSafetyStatus(alerts = []) {
+  const activeAlerts = alerts.filter(isCurrentHomeSafetyAlert)
+
+  if (activeAlerts.some((alert) => alert.severity === 'CRITICAL' || alert.type === 'EMERGENCY')) {
+    return { level: 'EMERGENCY', ...HOME_SAFETY_STATUS_DISPLAYS.EMERGENCY }
+  }
+
+  if (
+    activeAlerts.some(
+      (alert) =>
+        alert.severity === 'MEDIUM' || alert.severity === 'HIGH' || alert.type === 'DANGER',
+    )
+  ) {
+    return { level: 'CAUTION', ...HOME_SAFETY_STATUS_DISPLAYS.CAUTION }
+  }
+
+  if (activeAlerts.some((alert) => alert.severity === 'LOW')) {
+    return { level: 'SAFE', ...HOME_SAFETY_STATUS_DISPLAYS.SAFE }
+  }
+
+  return { level: 'SAFE', ...HOME_SAFETY_STATUS_DISPLAYS.SAFE }
+}
+
+export function getHomeSafetySummary(alerts = []) {
+  const riskStatus = getHomeSafetyStatus(alerts)
+  const level = riskStatus.level
+  const unreadLifeAlertCount = alerts.filter(
+    (alert) => isCurrentHomeSafetyAlert(alert) && alert.type === 'LIFE' && alert.status === 'UNREAD',
+  ).length
+  const summary = HOME_SAFETY_SUMMARIES[level]
+
+  if (level === 'SAFE' && unreadLifeAlertCount > 0) {
+    return {
+      ...summary,
+      level,
+      message: `안전한 상태예요. 아직 확인하지 않은 생활 알림이 ${unreadLifeAlertCount}개 있어요.`,
+    }
+  }
+
+  return { level, ...summary }
 }
 
 export function formatStatusUpdatedAt(value, now = new Date()) {
@@ -123,6 +189,10 @@ export function isEmergencyRequestAlert(alert) {
 
 function isActionableAlert(alert) {
   return alert.status !== 'CONFIRMED' && isCountableRecentAlert(alert)
+}
+
+function isCurrentHomeSafetyAlert(alert) {
+  return alert.status !== 'CONFIRMED' && !isEmergencyRequestAlert(alert)
 }
 
 function isCountableRecentAlert(alert) {

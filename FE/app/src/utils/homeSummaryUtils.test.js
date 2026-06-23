@@ -4,6 +4,8 @@ import {
   getActionableRecentAlerts,
   getDeviceWarningSummary,
   getEmergencyAvailability,
+  getHomeSafetySummary,
+  getHomeSafetyStatus,
   getSafetyStatusDisplay,
   mergeAlertStatusIntoHomeSummary,
   updateAlertsWithStatus,
@@ -18,6 +20,88 @@ describe('home summary utilities', () => {
     expect(getSafetyStatusDisplay('UNKNOWN')).toEqual({
       label: '상태 확인 필요',
       emoji: '🙂',
+    })
+  })
+
+  it('maps home safety status to the three display levels and scores', () => {
+    expect(getHomeSafetyStatus([{ severity: 'LOW', type: 'LIFE' }])).toMatchObject({
+      level: 'SAFE',
+      label: '낮음',
+      score: 20,
+    })
+    expect(getHomeSafetyStatus([{ severity: 'MEDIUM', type: 'LIFE' }])).toMatchObject({
+      level: 'CAUTION',
+      label: '주의',
+      score: 60,
+    })
+    expect(getHomeSafetyStatus([{ severity: 'HIGH', type: 'LIFE' }])).toMatchObject({
+      level: 'CAUTION',
+      score: 60,
+    })
+    expect(getHomeSafetyStatus([{ severity: 'LOW', type: 'DANGER' }])).toMatchObject({
+      level: 'CAUTION',
+      score: 60,
+    })
+    expect(getHomeSafetyStatus([{ severity: 'CRITICAL', type: 'LIFE' }])).toMatchObject({
+      level: 'EMERGENCY',
+      label: '긴급',
+      score: 95,
+    })
+    expect(getHomeSafetyStatus([{ severity: 'LOW', type: 'EMERGENCY' }])).toMatchObject({
+      level: 'EMERGENCY',
+      score: 95,
+    })
+    expect(
+      getHomeSafetyStatus([
+        { severity: 'CRITICAL', type: 'EMERGENCY', status: 'CONFIRMED' },
+        { severity: 'LOW', type: 'LIFE', status: 'UNREAD' },
+      ]),
+    ).toMatchObject({ level: 'SAFE', score: 20 })
+    expect(
+      getHomeSafetyStatus([
+        {
+          severity: 'CRITICAL',
+          type: 'EMERGENCY',
+          status: 'UNREAD',
+          title: '긴급 지원 요청 접수',
+        },
+        { severity: 'LOW', type: 'LIFE', status: 'UNREAD' },
+      ]),
+    ).toMatchObject({ level: 'SAFE', score: 20 })
+  })
+
+  it('summarizes the home safety state without exposing the risk score', () => {
+    expect(getHomeSafetySummary([{ severity: 'LOW', type: 'LIFE', status: 'CONFIRMED' }])).toEqual({
+      level: 'SAFE',
+      label: '안전',
+      emoji: '🙂',
+      message: '안전한 상태예요. 확인이 필요한 알림은 없어요.',
+    })
+    expect(getHomeSafetySummary([{ severity: 'LOW', type: 'LIFE', status: 'UNREAD' }])).toMatchObject({
+      level: 'SAFE',
+      label: '안전',
+      message: '안전한 상태예요. 아직 확인하지 않은 생활 알림이 1개 있어요.',
+    })
+    expect(
+      getHomeSafetySummary([
+        { severity: 'LOW', type: 'LIFE', status: 'UNREAD' },
+        { severity: 'LOW', type: 'LIFE', status: 'UNREAD' },
+      ]),
+    ).toMatchObject({
+      level: 'SAFE',
+      message: '안전한 상태예요. 아직 확인하지 않은 생활 알림이 2개 있어요.',
+    })
+    expect(getHomeSafetySummary([{ severity: 'HIGH', type: 'DANGER', status: 'UNREAD' }])).toMatchObject({
+      level: 'CAUTION',
+      label: '주의',
+      message: '주의가 필요한 알림이 있어요. 내용을 확인해 주세요.',
+    })
+    expect(
+      getHomeSafetySummary([{ severity: 'CRITICAL', type: 'EMERGENCY', status: 'UNREAD' }]),
+    ).toMatchObject({
+      level: 'EMERGENCY',
+      label: '긴급',
+      message: '긴급 상황이 감지됐어요. 바로 확인해 주세요.',
     })
   })
 
@@ -42,7 +126,7 @@ describe('home summary utilities', () => {
     ]
 
     expect(getActionableRecentAlerts(alerts).map((alert) => alert.alertId)).toEqual([2])
-    expect(createHomeAlertMetrics(alerts)).toEqual({
+    expect(createHomeAlertMetrics(alerts)).toMatchObject({
       total: 4,
       unread: 1,
       danger: 3,
@@ -70,7 +154,7 @@ describe('home summary utilities', () => {
     ]
 
     expect(getActionableRecentAlerts(alerts).map((alert) => alert.alertId)).toEqual([302])
-    expect(createHomeAlertMetrics(alerts)).toEqual({
+    expect(createHomeAlertMetrics(alerts)).toMatchObject({
       total: 1,
       unread: 1,
       danger: 1,

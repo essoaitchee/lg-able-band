@@ -2,16 +2,9 @@ import { useEffect, useState } from 'react'
 import {
   createHomeAlertMetrics,
   formatStatusUpdatedAt,
-  getActionableRecentAlerts,
   getEmergencyAvailability,
+  getHomeSafetySummary,
 } from '../utils/homeSummaryUtils'
-
-const severityLabels = {
-  LOW: '생활',
-  MEDIUM: '주의',
-  HIGH: '위험',
-  CRITICAL: '긴급',
-}
 
 export function HomeTab({
   emergencyMessage,
@@ -19,16 +12,16 @@ export function HomeTab({
   alerts,
   refreshError,
   refreshing,
-  statusDisplay,
   summary,
   onEmergencyRequest,
   onOpenAlerts,
+  onOpenUnreadAlerts,
   onRefreshHome,
 }) {
   const [currentTime, setCurrentTime] = useState(() => new Date())
   const homeAlerts = alerts || summary.recentAlerts
-  const recentAlerts = getActionableRecentAlerts(homeAlerts)
   const alertMetrics = createHomeAlertMetrics(homeAlerts)
+  const homeSafetySummary = getHomeSafetySummary(homeAlerts)
   const updatedAtLabel = formatStatusUpdatedAt(summary.safetyStatus.lastCheckedAt, currentTime)
   const emergencyAvailability = getEmergencyAvailability(summary)
   const emergencyStatusMessage = emergencyMessage
@@ -50,32 +43,43 @@ export function HomeTab({
 
   return (
     <>
-      <section className={`status-card home-safety-card status-${summary.safetyStatus.level.toLowerCase()}`}>
+      <section className={`status-card home-safety-card status-${homeSafetySummary.level.toLowerCase()}`}>
         <div className="status-card-header">
           <div>
             <p className="card-label">오늘의 안전 상태</p>
             <strong className="card-title safety-status-title">
-              <span>{statusDisplay?.label || summary.safetyStatus.level}</span>
+              <span>{homeSafetySummary.label}</span>
               <span className="safety-status-emoji" aria-hidden="true">
-                {statusDisplay?.emoji || '🙂'}
+                {homeSafetySummary.emoji}
               </span>
             </strong>
           </div>
           <div className="status-refresh-control">
-            {updatedAtLabel ? <span className="status-badge">{updatedAtLabel}</span> : null}
+            {updatedAtLabel ? (
+              <span className={`status-badge status-badge-${homeSafetySummary.level.toLowerCase()}`}>
+                {updatedAtLabel}
+              </span>
+            ) : null}
           </div>
         </div>
-        <p className="status-copy">{summary.safetyStatus.message}</p>
+        <p className="status-copy">{homeSafetySummary.message}</p>
         {refreshError ? (
           <p className="status-refresh-error" role="alert">
             {refreshError}
           </p>
         ) : null}
         <div className="home-metric-row" aria-label="오늘 알림 요약">
-          <div className="home-metric-pills">
-            <span className="home-metric-pill">최근 알림 {alertMetrics.total}건</span>
-            <span className="home-metric-pill">미확인 {alertMetrics.unread}건</span>
-            <span className="home-metric-pill danger">위험 {alertMetrics.danger}건</span>
+          <div className="home-metric-pills home-metric-pills-two">
+            <button className="home-metric-pill home-metric-button" type="button" onClick={onOpenAlerts}>
+              최근 알림 {alertMetrics.total}건
+            </button>
+            <button
+              className="home-metric-pill home-metric-button"
+              type="button"
+              onClick={onOpenUnreadAlerts}
+            >
+              미확인 {alertMetrics.unread}건
+            </button>
           </div>
           <button
             className="status-refresh-button home-metric-refresh-button"
@@ -112,39 +116,6 @@ export function HomeTab({
         </button>
       </section>
 
-      <section className="content-card alert-summary-card">
-        <div className="section-title-row">
-          <div>
-            <p className="card-label">실시간 알림 요약</p>
-            <strong className="card-title">최근 알림</strong>
-          </div>
-          <button className="summary-action-button" type="button" onClick={onOpenAlerts}>
-            전체 보기
-          </button>
-        </div>
-        <div className="alert-list">
-          {recentAlerts.length > 0 ? (
-            recentAlerts.map((alert) => (
-              <article className="alert-item" key={alert.alertId}>
-                <span className={`severity severity-${alert.severity.toLowerCase()}`}>
-                  {severityLabels[alert.severity] || alert.severity}
-                </span>
-                <div>
-                  <h3>{alert.title}</h3>
-                  <p>{alert.message}</p>
-                  <small>
-                    {alert.deviceName} · {formatCompactAlertTime(alert.occurredAt)} ·{' '}
-                    {alert.status === 'UNREAD' ? '미확인' : '확인 완료'}
-                  </small>
-                </div>
-              </article>
-            ))
-          ) : (
-            <p className="empty-state">최근 알림이 없습니다.</p>
-          )}
-        </div>
-      </section>
-
       {emergencyStatusMessage ? (
         <div
           className="device-toast"
@@ -174,22 +145,4 @@ function getEmergencyToastTone(message) {
   }
 
   return 'success'
-}
-
-function formatCompactAlertTime(value) {
-  if (!value) {
-    return '--:--'
-  }
-
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) {
-    return '--:--'
-  }
-
-  return date.toLocaleTimeString('ko-KR', {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-    timeZone: 'Asia/Seoul',
-  })
 }

@@ -28,6 +28,43 @@ describe('AlertsTab', () => {
     expect(screen.getByText('도어센서 장시간 열림')).toBeTruthy()
   })
 
+  it('selects the unread filter when it is opened with that filter', () => {
+    render(<AlertsTab accessibilityType="VISUAL" alerts={mockAppPreview.alerts} initialFilter="UNREAD" />)
+
+    expect(screen.getByRole('button', { name: '미확인' }).getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByText('전기레인지 과열 주의')).toBeTruthy()
+    expect(screen.queryByText('세탁 완료')).toBeNull()
+  })
+
+  it('removes each local-only test alert when it is confirmed', async () => {
+    const user = userEvent.setup()
+    const handleAlertDelete = vi.fn()
+    const testAlerts = [
+      { alertId: 'test-life', type: 'LIFE', severity: 'LOW', title: '테스트 생활', status: 'UNREAD', localOnly: true },
+      { alertId: 'test-caution', type: 'DANGER', severity: 'MEDIUM', title: '테스트 주의', status: 'UNREAD', localOnly: true },
+      { alertId: 'test-emergency', type: 'EMERGENCY', severity: 'CRITICAL', title: '테스트 긴급', status: 'UNREAD', localOnly: true },
+    ]
+
+    render(
+      <AlertsTab
+        accessibilityType="VISUAL"
+        alerts={testAlerts}
+        onAlertDelete={handleAlertDelete}
+      />,
+    )
+
+    for (const alert of testAlerts) {
+      await user.click(screen.getByRole('button', { name: `${alert.title} 상세 보기` }))
+      await user.click(screen.getByRole('button', { name: '확인 완료' }))
+      expect(screen.queryByText(alert.title)).toBeNull()
+    }
+
+    expect(handleAlertDelete).toHaveBeenCalledTimes(3)
+    expect(
+      globalThis.fetch.mock.calls.some(([url]) => String(url).includes('/api/alerts/')),
+    ).toBe(false)
+  })
+
   it('hides emergency request receipts while keeping real emergency alerts visible', async () => {
     const user = userEvent.setup()
     const alerts = [
