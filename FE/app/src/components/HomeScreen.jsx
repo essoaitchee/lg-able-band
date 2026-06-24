@@ -29,7 +29,6 @@ import {
 import { completeWearablePairing } from '../services/wearablePairingService'
 import {
   getEmergencyAvailability,
-  getSafetyStatusDisplay,
   mergeAlertStatusIntoHomeSummary,
   updateAlertsWithStatus,
 } from '../utils/homeSummaryUtils'
@@ -66,11 +65,91 @@ const MAX_DEVICE_COUNT = 6
 const HOME_ALERT_SYNC_INTERVAL_MS = 3000
 const LIVING_SIGNAL_SYNC_INTERVAL_MS = 5000
 const LIVING_SIGNAL_REPORT_COOLDOWN_MS = 15000
+const LOCAL_TEST_ALERT_PREFIX = 'local-test-safety-v4-'
+const DISMISSED_LOCAL_TEST_ALERTS_STORAGE_KEY = 'lg-able-band.dismissedLocalTestAlerts'
 
+const localTestAlerts = [
+  {
+    alertId: `${LOCAL_TEST_ALERT_PREFIX}life`,
+    type: 'LIFE',
+    severity: 'LOW',
+    title: '테스트 세탁 완료',
+    message: '개발 화면에서만 보이는 테스트용 생활 알림입니다.',
+    deviceName: '세탁기',
+    locationName: '세탁실',
+    occurredAt: '2026-06-24T09:00:00+09:00',
+    status: 'UNREAD',
+    localOnly: true,
+    requiresGuardianNotify: false,
+  },
+  {
+    alertId: `${LOCAL_TEST_ALERT_PREFIX}caution`,
+    type: 'DANGER',
+    severity: 'MEDIUM',
+    title: '테스트 공기질 주의',
+    message: '개발 화면에서만 보이는 테스트용 주의 알림입니다.',
+    deviceName: '공기질 센서',
+    locationName: '거실',
+    occurredAt: '2026-06-24T09:01:00+09:00',
+    status: 'UNREAD',
+    localOnly: true,
+    requiresGuardianNotify: false,
+  },
+  {
+    alertId: `${LOCAL_TEST_ALERT_PREFIX}emergency`,
+    type: 'EMERGENCY',
+    severity: 'CRITICAL',
+    title: '테스트 긴급 확인',
+    message: '개발 화면에서만 보이는 테스트용 긴급 알림입니다.',
+    deviceName: '인덕션',
+    locationName: '주방',
+    occurredAt: '2026-06-24T09:02:00+09:00',
+    status: 'UNREAD',
+    localOnly: true,
+    requiresGuardianNotify: false,
+  },
+]
 const connectionStatusLabels = {
   CONNECTED: '연결됨',
   PENDING: '대기 중',
   DISCONNECTED: '연결 해제',
+}
+
+function addLocalTestAlerts(alerts = []) {
+  if (import.meta.env.MODE !== 'development') {
+    return alerts
+  }
+
+  const existingAlertIds = new Set(alerts.map((alert) => alert.alertId))
+  const dismissedAlertIds = getDismissedLocalTestAlertIds()
+  return [
+    ...localTestAlerts.filter(
+      (alert) => !existingAlertIds.has(alert.alertId) && !dismissedAlertIds.has(alert.alertId),
+    ),
+    ...alerts,
+  ]
+}
+
+function getDismissedLocalTestAlertIds() {
+  try {
+    const storedIds = JSON.parse(window.sessionStorage.getItem(DISMISSED_LOCAL_TEST_ALERTS_STORAGE_KEY) || '[]')
+    return new Set(Array.isArray(storedIds) ? storedIds : [])
+  } catch {
+    return new Set()
+  }
+}
+
+function dismissLocalTestAlert(alertId) {
+  if (!String(alertId).startsWith(LOCAL_TEST_ALERT_PREFIX)) {
+    return
+  }
+
+  const dismissedAlertIds = getDismissedLocalTestAlertIds()
+  dismissedAlertIds.add(alertId)
+  window.sessionStorage.setItem(
+    DISMISSED_LOCAL_TEST_ALERTS_STORAGE_KEY,
+    JSON.stringify([...dismissedAlertIds]),
+  )
 }
 
 export function HomeScreen({ session, onLogout }) {
@@ -79,6 +158,7 @@ export function HomeScreen({ session, onLogout }) {
   const isAdminAccount = sessionEmail === ADMIN_ACCOUNT_EMAIL
   const [activeTab, setActiveTab] = useState('home')
   const [alertsScreen, setAlertsScreen] = useState('list')
+  const [alertsFilter, setAlertsFilter] = useState('ALL')
   const [menuScreen, setMenuScreen] = useState('root')
   const [linkedGuardians, setLinkedGuardians] = useState([])
   const [guardianListState, setGuardianListState] = useState({
@@ -152,6 +232,7 @@ export function HomeScreen({ session, onLogout }) {
       summary: safetySummary,
       preview: {
         ...preview,
+        alerts: addLocalTestAlerts(preview.alerts),
         accessibility: createAccessibilityView(
           preview.accessibility,
           accessibilitySettings,
@@ -491,6 +572,11 @@ export function HomeScreen({ session, onLogout }) {
     }
   }
 
+  function handleOpenAlerts(filter) {
+    setAlertsFilter(filter)
+    handleTabChange('alerts')
+  }
+
   async function handleEmergencyRequest(emergencyAvailability) {
     if (emergencySubmitting) {
       return
@@ -552,6 +638,7 @@ export function HomeScreen({ session, onLogout }) {
   }
 
   function handleAlertDelete(alertId) {
+    dismissLocalTestAlert(alertId)
     locallyDeletedAlertIdsRef.current.add(alertId)
     setHomeState((currentState) => {
       if (!currentState.summary || !currentState.preview) {
@@ -703,7 +790,6 @@ export function HomeScreen({ session, onLogout }) {
   }
 
   const { preview, summary } = homeState
-  const statusDisplay = getSafetyStatusDisplay(summary.safetyStatus.level)
   const homeUserName = summary.user?.name || session.account.name
   const displayTitle = activeTab === 'home' ? `${homeUserName} 홈` : currentTitle
 
@@ -751,10 +837,10 @@ export function HomeScreen({ session, onLogout }) {
             alerts={preview.alerts}
             refreshError={homeRefreshState.error}
             refreshing={homeRefreshState.refreshing}
-            statusDisplay={statusDisplay}
             summary={summary}
             onEmergencyRequest={handleEmergencyRequest}
-            onOpenAlerts={() => handleTabChange('alerts')}
+            onOpenAlerts={() => handleOpenAlerts('ALL')}
+            onOpenUnreadAlerts={() => handleOpenAlerts('UNREAD')}
             onRefreshHome={handleHomeRefresh}
           />
         ) : null}
@@ -764,6 +850,7 @@ export function HomeScreen({ session, onLogout }) {
             accessibilityType={session.userProfile?.accessibilityType || 'VISUAL'}
             alerts={preview.alerts}
             alertView={alertsScreen}
+            initialFilter={alertsFilter}
             onAlertDelete={handleAlertDelete}
             onAlertRestore={handleAlertRestore}
             onAlertStatusChange={handleAlertStatusChange}

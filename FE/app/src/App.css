@@ -528,6 +528,10 @@ button:disabled {
   min-width: 0;
 }
 
+.home-metric-pills-two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .home-metric-pill {
   min-width: 0;
   border-radius: 8px;
@@ -541,6 +545,17 @@ button:disabled {
 
 .home-metric-pill.danger {
   color: #be123c;
+}
+
+.home-metric-button {
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+}
+
+.home-metric-button:focus-visible {
+  outline: 3px solid #2563eb;
+  outline-offset: 2px;
 }
 
 .home-metric-refresh-button {
@@ -8385,6 +8400,16 @@ h2 {
   color: #e11d48 !important;
   font-size: 0.76rem !important;
   font-weight: 520 !important;
+}
+
+.phone-screen .home-safety-card .status-badge.status-badge-safe {
+  background: #ecfdf5 !important;
+  color: #15803d !important;
+}
+
+.phone-screen .home-safety-card .status-badge.status-badge-caution {
+  background: #fefce8 !important;
+  color: #a16207 !important;
 }
 
 .phone-screen .home-metric-pill.danger {

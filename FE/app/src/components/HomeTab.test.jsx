@@ -2,7 +2,6 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { vi } from 'vitest'
 import { HomeTab } from './HomeTab'
-import { getSafetyStatusDisplay } from '../utils/homeSummaryUtils'
 
 const baseSummary = {
   safetyStatus: {
@@ -48,22 +47,27 @@ const baseSummary = {
 }
 
 describe('HomeTab', () => {
-  it('renders backend status freshness while counting confirmed alerts in the total', () => {
+  it('keeps the safety-status alert metrics while hiding the real-time alert summary', () => {
     renderHomeTab()
 
     expect(screen.getByText('주의')).toBeTruthy()
+    expect(screen.getByText('주의가 필요한 알림이 있어요. 내용을 확인해 주세요.')).toBeTruthy()
+    expect(screen.queryByText(/60점/)).toBeNull()
+    expect(document.querySelector('.status-badge')?.className).toContain('status-badge-caution')
     expect(screen.queryByText('방금')).toBeNull()
     expect(screen.getByText(/분 전|시간 전/)).toBeTruthy()
-    expect(screen.getByText('최근 알림 2건')).toBeTruthy()
-    expect(screen.getByText('미확인 1건')).toBeTruthy()
-    expect(screen.getByText('위험 1건')).toBeTruthy()
-    expect(screen.getByText('전기레인지 과열 주의')).toBeTruthy()
+    expect(screen.getByRole('button', { name: '최근 알림 2건' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '미확인 1건' })).toBeTruthy()
+    expect(screen.queryByText('위험 1건')).toBeNull()
+    expect(screen.queryByText('실시간 알림 요약')).toBeNull()
+    expect(screen.queryByText('최근 알림')).toBeNull()
+    expect(screen.queryByText('전기레인지 과열 주의')).toBeNull()
     expect(screen.queryByText('식사 완료')).toBeNull()
     expect(screen.queryByText('기기 연결 상태')).toBeNull()
     expect(screen.queryByText('주의/오류 없음')).toBeNull()
   })
 
-  it('formats recent alert times in Korea time even when the source value is UTC', () => {
+  it('does not render alert details from the real-time summary data', () => {
     renderHomeTab({
       ...baseSummary,
       recentAlerts: [
@@ -80,7 +84,48 @@ describe('HomeTab', () => {
       ],
     })
 
-    expect(screen.getByText(/16:43/)).toBeTruthy()
+    expect(screen.queryByText('UTC 알림')).toBeNull()
+    expect(screen.queryByText('시간은 한국 시간으로 보여야 합니다.')).toBeNull()
+    expect(screen.queryByText(/16:43/)).toBeNull()
+  })
+
+  it('shows a safe summary when only a confirmed life alert remains', () => {
+    renderHomeTab({
+      ...baseSummary,
+      safetyStatus: { ...baseSummary.safetyStatus, level: 'EMERGENCY' },
+      recentAlerts: [
+        {
+          alertId: 11,
+          type: 'LIFE',
+          severity: 'LOW',
+          title: '세탁 완료',
+          status: 'CONFIRMED',
+        },
+      ],
+    })
+
+    expect(screen.getByText('안전')).toBeTruthy()
+    expect(screen.getByText('안전한 상태예요. 확인이 필요한 알림은 없어요.')).toBeTruthy()
+    expect(screen.queryByText('긴급')).toBeNull()
+    expect(document.querySelector('.status-badge')?.className).toContain('status-badge-safe')
+  })
+
+  it('uses the emergency color class for the time badge when an emergency alert is active', () => {
+    renderHomeTab({
+      ...baseSummary,
+      recentAlerts: [
+        {
+          alertId: 12,
+          type: 'EMERGENCY',
+          severity: 'CRITICAL',
+          title: '긴급 알림',
+          status: 'UNREAD',
+        },
+      ],
+    })
+
+    expect(screen.getByText('긴급')).toBeTruthy()
+    expect(document.querySelector('.status-badge')?.className).toContain('status-badge-emergency')
   })
 
   it('keeps the SOS button clickable when a guardian must be registered first', async () => {
@@ -110,6 +155,19 @@ describe('HomeTab', () => {
     await user.click(screen.getByRole('button', { name: '홈 정보 새로고침' }))
 
     expect(handleRefreshHome).toHaveBeenCalledTimes(1)
+  })
+
+  it('opens all alerts or unread alerts from the matching safety-summary item', async () => {
+    const user = userEvent.setup()
+    const handleOpenAlerts = vi.fn()
+    const handleOpenUnreadAlerts = vi.fn()
+    renderHomeTab(baseSummary, { onOpenAlerts: handleOpenAlerts, onOpenUnreadAlerts: handleOpenUnreadAlerts })
+
+    await user.click(screen.getByRole('button', { name: '최근 알림 2건' }))
+    await user.click(screen.getByRole('button', { name: '미확인 1건' }))
+
+    expect(handleOpenAlerts).toHaveBeenCalledTimes(1)
+    expect(handleOpenUnreadAlerts).toHaveBeenCalledTimes(1)
   })
 
   it('shows a disabled syncing control while the home data refreshes', () => {
@@ -142,10 +200,10 @@ function renderHomeTab(summary = baseSummary, options = {}) {
       emergencyMessage={options.emergencyMessage || ''}
       emergencySubmitting={false}
       refreshing={options.refreshing || false}
-      statusDisplay={getSafetyStatusDisplay(summary.safetyStatus.level)}
       summary={summary}
       onEmergencyRequest={options.onEmergencyRequest || (() => {})}
-      onOpenAlerts={() => {}}
+      onOpenAlerts={options.onOpenAlerts || (() => {})}
+      onOpenUnreadAlerts={options.onOpenUnreadAlerts || (() => {})}
       onRefreshHome={options.onRefreshHome || (() => {})}
     />,
   )
